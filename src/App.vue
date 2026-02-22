@@ -133,7 +133,7 @@
         </div>
       </div>
 
-      <!-- ═══ PROFILE TAB ═══ (No changes, provided for context) -->
+      <!-- ═══ PROFILE TAB ═══ -->
       <div v-if="tab === 'profile'" class="tab profile-tab">
         <div class="profile-hero">
           <div class="profile-avatar">{{ user.emoji }}</div>
@@ -176,7 +176,7 @@
         </div>
       </div>
 
-      <!-- ═══ ADMIN TAB ═══ (No changes, provided for context) -->
+      <!-- ═══ ADMIN TAB ═══ -->
       <div v-if="tab === 'admin' && isAdmin" class="tab admin-tab">
         <div class="admin-stats">
           <div class="astat"><span class="astat-val">{{ adminData.totalUsers }}</span><span class="astat-lbl">Users</span></div>
@@ -188,27 +188,27 @@
           <button class="admin-action-btn" @click="triggerRoundEnd(true)">Force End Round</button>
           <button class="admin-action-btn danger-btn" @click="createFirestoreRound">Reset Round</button>
         </div>
+        
+        <!-- Deposit Requests (for info only, auto-processed) -->
         <div class="admin-section">
           <div class="section-head">
-            <span class="card-title">Deposit Requests</span>
+            <span class="card-title">📥 Recent Deposits</span>
             <span class="badge">{{ adminData.deposits.length }}</span>
           </div>
-          <div v-if="!adminData.deposits.length" class="empty-msg">No pending deposits</div>
-          <div v-for="r in adminData.deposits" :key="r.id" class="req-row">
+          <div v-if="!adminData.deposits.length" class="empty-msg">No recent deposits</div>
+          <div v-for="r in adminData.deposits.slice(0,5)" :key="r.id" class="req-row">
             <div class="req-info">
               <span class="req-user">{{ r.userName }} <span class="req-uid">#{{ (r.userId||'').slice(-4) }}</span></span>
               <span class="req-meta">{{ fmt(r.amount) }} TON · {{ formatTime(r.ts) }}</span>
-              <span v-if="r.txHash" class="req-txhash">tx: {{ r.txHash.slice(0,16) }}…</span>
-            </div>
-            <div class="req-actions">
-              <button class="req-approve" @click="approveDeposit(r)" :disabled="r.processing">✓</button>
-              <button class="req-reject" @click="rejectDeposit(r)" :disabled="r.processing">✗</button>
+              <span :class="['req-status', r.status]">{{ r.status }}</span>
             </div>
           </div>
         </div>
+
+        <!-- Withdrawal Requests (manual approval) -->
         <div class="admin-section">
           <div class="section-head">
-            <span class="card-title">Withdrawal Requests</span>
+            <span class="card-title">💸 Pending Withdrawals</span>
             <span class="badge">{{ adminData.withdraws.length }}</span>
           </div>
           <div v-if="!adminData.withdraws.length" class="empty-msg">No pending withdrawals</div>
@@ -224,10 +224,12 @@
             </div>
           </div>
         </div>
+
+        <!-- Users List -->
         <div class="admin-section">
-          <div class="card-title" style="margin-bottom:12px">All Users</div>
+          <div class="card-title" style="margin-bottom:12px">👥 Users</div>
           <div v-if="!adminData.users.length" class="empty-msg">No users yet</div>
-          <div v-for="u in adminData.users" :key="u.id" class="user-row">
+          <div v-for="u in adminData.users.slice(0,10)" :key="u.id" class="user-row">
             <div class="user-info">
               <span class="user-emoji">{{ u.emoji }}</span>
               <div>
@@ -259,111 +261,156 @@
       </div>
     </transition>
 
-    <!-- MODALS (No changes, provided for context) -->
+    <!-- DEPOSIT MODAL - AUTOMATIC VERSION -->
     <transition name="fade">
-      <div v-if="modal" class="overlay" @click.self="closeModal">
+      <div v-if="modal === 'deposit'" class="overlay" @click.self="closeModal">
         <div class="modal-card">
-          <div v-if="modal === 'deposit'">
-            <div class="modal-title">Deposit TON</div>
-            <div class="modal-steps">
-              <div class="step" :class="{ active: depositStep === 1 }"><span class="step-num">1</span><span>Amount</span></div>
-              <div class="step-line"></div>
-              <div class="step" :class="{ active: depositStep === 2 }"><span class="step-num">2</span><span>Send</span></div>
-              <div class="step-line"></div>
-              <div class="step" :class="{ active: depositStep === 3 }"><span class="step-num">3</span><span>Confirm</span></div>
-            </div>
-            <div v-if="depositStep === 1">
-              <div class="preset-row">
-                <button v-for="a in [5,10,25,50,100]" :key="a"
-                  :class="['preset-btn',{active:depositAmt===a}]" @click="depositAmt=a">{{ a }}</button>
-              </div>
-              <div class="modal-field">
-                <input type="number" v-model.number="depositAmt" min="0.1" step="0.1" class="modal-input" placeholder="Amount" />
-                <span class="modal-cur">TON</span>
-              </div>
-              <div class="modal-btns">
-                <button class="modal-cancel" @click="closeModal">Cancel</button>
-                <button class="modal-confirm" @click="depositStep=2" :disabled="depositAmt<0.1">Next →</button>
-              </div>
-            </div>
-            <div v-if="depositStep === 2">
-              <div class="deposit-info">
-                <div class="dep-row">
-                  <span class="dep-lbl">Send exactly</span>
-                  <span class="dep-val gold">{{ fmt(depositAmt) }} TON</span>
-                </div>
-                <div class="dep-row">
-                  <span class="dep-lbl">To wallet</span>
-                  <div class="dep-wallet-row">
-                    <span class="dep-wallet">{{ HOUSE_WALLET }}</span>
-                    <button class="copy-small" @click="copyText(HOUSE_WALLET,'Wallet copied!')">⎘</button>
-                  </div>
-                </div>
-                <div class="dep-row">
-                  <span class="dep-lbl">Comment (required!)</span>
-                  <div class="dep-wallet-row">
-                    <span class="dep-wallet gold">{{ currentDepComment }}</span>
-                    <button class="copy-small" @click="copyText(currentDepComment,'Comment copied!')">⎘</button>
-                  </div>
-                </div>
-                <div class="dep-note">⚠️ Include the exact comment — without it deposit won't be credited.</div>
-              </div>
-              <button class="ton-connect-btn" @click="openTonLink">
-                <span>💎</span> Open in TON Wallet
-              </button>
-              <div class="modal-btns" style="margin-top:12px">
-                <button class="modal-cancel" @click="depositStep=1">← Back</button>
-                <button class="modal-confirm" @click="depositStep=3">I sent it →</button>
-              </div>
-            </div>
-            <div v-if="depositStep === 3">
-              <p class="dep-confirm-info">Paste transaction hash so admin can verify:</p>
-              <div class="modal-field">
-                <input type="text" v-model="depositTxHash" class="modal-input"
-                  placeholder="TX hash (optional)" style="font-size:12px" />
-              </div>
-              <div v-if="depositLoading" class="loading-row"><span class="spinner-small"></span> Sending…</div>
-              <div v-if="depositDone" class="success-msg">✓ Request sent! Admin will credit your balance.</div>
-              <div class="modal-btns" v-if="!depositDone">
-                <button class="modal-cancel" @click="depositStep=2">← Back</button>
-                <button class="modal-confirm" @click="submitDepositRequest" :disabled="depositLoading">Submit</button>
-              </div>
-              <button v-if="depositDone" class="modal-confirm" style="width:100%;margin-top:8px" @click="closeModal">Done</button>
-            </div>
-          </div>
-          <div v-if="modal === 'withdraw'">
-            <div class="modal-title">Withdraw TON</div>
-            <div class="modal-avail">Available: <strong class="gold">{{ fmt(balance) }} TON</strong></div>
+          <div class="modal-title">💰 Deposit TON</div>
+          
+          <!-- Step 1: Amount -->
+          <div v-if="depositStep === 1">
             <div class="preset-row">
-              <button v-for="a in [5,10,25,50]" :key="a"
-                :class="['preset-btn',{active:withdrawAmt===a}]" :disabled="a>balance" @click="withdrawAmt=a">{{ a }}</button>
-              <button :class="['preset-btn',{active:withdrawAmt===balance}]" @click="withdrawAmt=balance">MAX</button>
+              <button v-for="a in [5,10,25,50,100]" :key="a"
+                :class="['preset-btn', { active: depositAmt === a }]"
+                @click="depositAmt = a">{{ a }}</button>
             </div>
             <div class="modal-field">
-              <input type="number" v-model.number="withdrawAmt" min="0.1" :max="balance" step="0.1" class="modal-input" />
+              <input type="number" v-model.number="depositAmt" min="0.1" step="0.1" 
+                class="modal-input" placeholder="Amount" />
               <span class="modal-cur">TON</span>
             </div>
-            <div class="modal-field">
-              <input type="text" v-model="withdrawWallet" class="modal-input"
-                placeholder="Your TON wallet address" style="font-size:12px" />
-            </div>
-            <div class="dep-note">Withdrawals processed manually within 24h.</div>
-            <div v-if="withdrawLoading" class="loading-row" style="margin-top:12px">
-              <span class="spinner-small"></span> Sending request…
-            </div>
-            <div v-if="withdrawDone" class="success-msg">✓ Withdrawal request submitted!</div>
-            <div class="modal-btns" style="margin-top:14px" v-if="!withdrawDone">
+            <div class="modal-btns">
               <button class="modal-cancel" @click="closeModal">Cancel</button>
-              <button class="modal-confirm" @click="submitWithdrawRequest"
-                :disabled="withdrawAmt<0.1||withdrawAmt>balance||!withdrawWallet||withdrawLoading">Request</button>
+              <button class="modal-confirm" @click="depositStep = 2" :disabled="depositAmt < 0.1">Next →</button>
             </div>
-            <button v-if="withdrawDone" class="modal-confirm" style="width:100%;margin-top:8px" @click="closeModal">Done</button>
+          </div>
+
+          <!-- Step 2: Send Instructions -->
+          <div v-if="depositStep === 2">
+            <div class="deposit-info">
+              <div class="dep-row">
+                <span class="dep-lbl">Send exactly</span>
+                <span class="dep-val gold">{{ fmt(depositAmt) }} TON</span>
+              </div>
+              <div class="dep-row">
+                <span class="dep-lbl">To wallet</span>
+                <div class="dep-wallet-row">
+                  <span class="dep-wallet">{{ HOUSE_WALLET }}</span>
+                  <button class="copy-small" @click="copyText(HOUSE_WALLET)">📋</button>
+                </div>
+              </div>
+              <div class="dep-row">
+                <span class="dep-lbl">Comment (REQUIRED!)</span>
+                <div class="dep-wallet-row highlight">
+                  <span class="dep-wallet gold">{{ currentDepComment }}</span>
+                  <button class="copy-small gold" @click="copyText(currentDepComment)">📋</button>
+                </div>
+              </div>
+              <div class="dep-note">
+                ⚠️ Include this exact comment! Without it, deposit won't be credited automatically.
+              </div>
+            </div>
+
+            <button class="ton-connect-btn" @click="openTonLink">
+              <span>💎</span> Open in TON Wallet
+            </button>
+
+            <div class="modal-btns">
+              <button class="modal-cancel" @click="depositStep = 1">← Back</button>
+              <button class="modal-confirm" @click="submitDepositRequest">I've Sent →</button>
+            </div>
+          </div>
+
+          <!-- Step 3: Waiting for Confirmation (AUTOMATIC) -->
+          <div v-if="depositStep === 3">
+            <div class="deposit-status">
+              <div v-if="!depositDone" class="waiting-message">
+                <div class="spinner-large"></div>
+                <p class="status-text">{{ depositStatus }}</p>
+                <p class="status-hint">
+                  Your balance will be updated automatically when the transaction is detected on the blockchain.
+                  This usually takes 1-2 minutes.
+                </p>
+              </div>
+              <div v-if="depositDone" class="success-message">
+                <div class="success-icon">✅</div>
+                <p class="success-text">Transaction confirmed!</p>
+                <p class="success-sub">+{{ fmt(depositAmt) }} TON added to your balance</p>
+              </div>
+            </div>
+            
+            <div class="modal-btns" v-if="!depositDone">
+              <button class="modal-cancel" @click="closeModal">Close (will continue checking)</button>
+            </div>
+            <div class="modal-btns" v-if="depositDone">
+              <button class="modal-confirm" @click="closeModal" style="width:100%">Done</button>
+            </div>
           </div>
         </div>
       </div>
     </transition>
 
-    <!-- Toast -->
+    <!-- WITHDRAW MODAL -->
+    <transition name="fade">
+      <div v-if="modal === 'withdraw'" class="overlay" @click.self="closeModal">
+        <div class="modal-card">
+          <div class="modal-title">💸 Withdraw TON</div>
+          
+          <div class="modal-avail">
+            Available: <strong class="gold">{{ fmt(balance) }} TON</strong>
+          </div>
+          
+          <div class="preset-row">
+            <button v-for="a in [5,10,25,50]" :key="a"
+              :class="['preset-btn', { active: withdrawAmt === a }]"
+              :disabled="a > balance"
+              @click="withdrawAmt = a">{{ a }}</button>
+            <button :class="['preset-btn', { active: withdrawAmt === balance }]"
+              @click="withdrawAmt = balance">MAX</button>
+          </div>
+          
+          <div class="modal-field">
+            <input type="number" v-model.number="withdrawAmt" min="0.1" :max="balance" step="0.1" 
+              class="modal-input" />
+            <span class="modal-cur">TON</span>
+          </div>
+          
+          <div class="modal-field">
+            <input type="text" v-model="withdrawWallet" class="modal-input"
+              placeholder="Your TON wallet address (EQ... or UQ...)" />
+          </div>
+
+          <div v-if="withdrawWallet && !isValidTonAddress" class="error-message">
+            Invalid TON address format
+          </div>
+
+          <div class="dep-note">
+            ⏱️ Withdrawals are processed manually by admin within 24 hours.
+          </div>
+
+          <div v-if="withdrawLoading" class="loading-row">
+            <span class="spinner-small"></span> Processing...
+          </div>
+          
+          <div v-if="withdrawSuccess" class="success-msg">
+            ✓ Withdrawal request submitted!
+          </div>
+
+          <div class="modal-btns" v-if="!withdrawSuccess">
+            <button class="modal-cancel" @click="closeModal">Cancel</button>
+            <button class="modal-confirm" @click="submitWithdrawRequest" 
+              :disabled="!canWithdraw || withdrawLoading">
+              Request Withdrawal
+            </button>
+          </div>
+          <button v-if="withdrawSuccess" class="modal-confirm" style="width:100%" @click="closeModal">
+            Done
+          </button>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Toast Notifications -->
     <transition name="toast-anim">
       <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
     </transition>
@@ -372,7 +419,6 @@
 </template>
 
 <script>
-// IMPORTANT: Make sure you have Firestore configured in 'firebase.js'
 import { db } from './firebase.js';
 import {
   doc, collection, addDoc, updateDoc, getDoc, getDocs,
@@ -380,19 +426,31 @@ import {
   where, setDoc, increment, writeBatch, runTransaction
 } from 'firebase/firestore';
 
+// ==================== CONSTANTS ====================
 const EMOJIS = ['😎','🦊','🐸','🐼','🦁','🐨','🐯','🦅','🐺','🦝','🐻','🦋'];
-const COLORS  = ['#e05252','#52a0e0','#52c77a','#e0a052','#9b52e0','#52d4e0','#e0527a','#7ae052'];
-const ROUND_TIME  = 30; // Seconds
-const HOUSE_FEE   = 0.05; // 5%
-const HOUSE_WALLET = 'UQD2NmD_lDYc33Ph1zwweWbgKHPGdVJMhBRWKl_VC7g3KHum'; // ← REPLACE WITH YOUR WALLET
+const COLORS = ['#e05252','#52a0e0','#52c77a','#e0a052','#9b52e0','#52d4e0','#e0527a','#7ae052'];
+const ROUND_TIME = 30; // Seconds
+const HOUSE_FEE = 0.05; // 5%
+const HOUSE_WALLET = '0QBbz6lrdck00jKezlUKQAn1QzV1uOB1uUs5caKFv-m1zxCM';
 
-// --- Helper Functions ---
+// TonCenter API (Testnet)
+const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
+const TONCENTER_API_URL = 'https://testnet.toncenter.com/api/v2';
+
+// ==================== HELPERS ====================
 function randInt(n) { return Math.floor(Math.random() * n); }
+
 function weightedRandom(players) {
   const total = players.reduce((s, p) => s + p.bet, 0);
   let r = Math.random() * total;
   for (const p of players) { r -= p.bet; if (r <= 0) return p; }
-  return players[players.length - 1]; // Fallback for floating point issues
+  return players[players.length - 1];
+}
+
+function isValidTonAddress(address) {
+  if (!address) return false;
+  address = address.trim();
+  return address.startsWith('EQ') || address.startsWith('UQ') || address.startsWith('0:');
 }
 
 export default {
@@ -400,45 +458,102 @@ export default {
 
   data() {
     return {
-      ROUND_TIME, HOUSE_WALLET,
-      user: null, tab: 'game', balance: 0,
+      // Constants
+      ROUND_TIME,
+      HOUSE_WALLET,
+      
+      // User & Connection
+      user: null,
+      tab: 'game',
+      balance: 0,
       isConnected: false,
 
-      betAmount: 1, betLoading: false, betError: '',
-      //-- V2 Game States: waiting_for_players | waiting | spinning | finished
-      game: { id: null, players: [], totalBet: 0, status: 'waiting_for_players', endsAt: null },
-
-      isSpinning: false, timeLeft: ROUND_TIME,
-      timerHandle: null, spinAngle: 0, animFrame: null, winner: null,
-
-      _unsubGame: null, _unsubUser: null,
-      _unsubAdmin: {}, // Object to hold multiple admin listeners
-
-      stats: { played: 0, won: 0, earned: 0 },
-      history: [], copied: false,
-
-      modal: null,
-      depositStep: 1, depositAmt: 10, depositTxHash: '',
-      depositLoading: false, depositDone: false, currentDepComment: '',
-
-      withdrawAmt: 10, withdrawWallet: '', withdrawLoading: false, withdrawDone: false,
-
-      adminData: {
-        totalUsers: 0, totalGames: 0, totalVolume: 0, houseBalance: 0,
-        deposits: [], withdraws: [], users: [],
+      // Betting
+      betAmount: 1,
+      betLoading: false,
+      betError: '',
+      
+      // Game State
+      game: { 
+        id: null, 
+        players: [], 
+        totalBet: 0, 
+        status: 'waiting_for_players', 
+        endsAt: null,
+        spinStartTime: null, // Время начала вращения
+        spinDuration: 6000,   // Длительность вращения в мс
+        winner: null
       },
-      toastMsg: '', _toastTimer: null,
+
+      // Spin Animation
+      isSpinning: false,
+      timeLeft: ROUND_TIME,
+      timerHandle: null,
+      spinAngle: 0,
+      animFrame: null,
+      winner: null,
+      spinProgress: 0, // Прогресс анимации от 0 до 1
+
+      // Firebase Listeners
+      _unsubGame: null,
+      _unsubUser: null,
+      _unsubAdmin: {},
+
+      // Profile Stats
+      stats: { played: 0, won: 0, earned: 0 },
+      history: [],
+      copied: false,
+
+      // Modal Control
+      modal: null,
+      
+      // Deposit
+      depositStep: 1,
+      depositAmt: 10,
+      depositLoading: false,
+      depositDone: false,
+      currentDepComment: '',
+      depositStatus: 'Waiting for transaction...',
+      
+      // Withdraw
+      withdrawAmt: 10,
+      withdrawWallet: '',
+      withdrawLoading: false,
+      withdrawSuccess: false,
+
+      // Admin Data
+      adminData: {
+        totalUsers: 0,
+        totalGames: 0,
+        totalVolume: 0,
+        houseBalance: 0,
+        deposits: [],
+        withdraws: [],
+        users: [],
+      },
+
+      // UI
+      toastMsg: '',
+      _toastTimer: null,
+      
+      // Auto-check interval for deposits
+      _depositCheckInterval: null,
+      _lastCheckedTx: {},
     };
   },
 
   computed: {
-    isAdmin() { return this.user?.handle === 'whsxg'; }, // Replace with your Telegram handle
+    isAdmin() { 
+      return this.user?.handle === 'whsxg';
+    },
 
     canBet() {
-      return !this.isSpinning && !this.userAlreadyBet
-        && this.betAmount >= 0.1 && this.betAmount <= this.balance
-        && (this.game.status === 'waiting' || this.game.status === 'waiting_for_players')
-        && this.isConnected;
+      return !this.isSpinning && 
+             !this.userAlreadyBet &&
+             this.betAmount >= 0.1 && 
+             this.betAmount <= this.balance &&
+             (this.game.status === 'waiting' || this.game.status === 'waiting_for_players') &&
+             this.isConnected;
     },
 
     userAlreadyBet() {
@@ -446,20 +561,36 @@ export default {
     },
 
     referralLink() {
-      // Replace YourBotName with your actual Telegram bot's name
-      return `https://t.me/YourBotName?start=ref_${this.user?.id}`;
+      return `https://t.me/TonRouletteBot?start=ref_${this.user?.id}`;
     },
 
     winRate() {
       if (!this.stats.played) return 0;
       return Math.round(this.stats.won / this.stats.played * 100);
     },
+    
+    canWithdraw() {
+      return this.withdrawAmt >= 0.1 && 
+             this.withdrawAmt <= this.balance && 
+             this.withdrawWallet.length >= 10 &&
+             isValidTonAddress(this.withdrawWallet);
+    },
+    
+    isValidTonAddress() {
+      return isValidTonAddress(this.withdrawWallet);
+    },
   },
 
   mounted() {
     this.tryTelegram();
-    // Add a polyfill for performance.now() if not present
-    if (typeof performance === 'undefined') { window.performance = { now: () => Date.now() }; }
+    if (typeof performance === 'undefined') { 
+      window.performance = { now: () => Date.now() }; 
+    }
+    
+    // Start checking for deposits every 8 seconds
+    this._depositCheckInterval = setInterval(() => {
+      if (this.user) this.checkPendingDeposits();
+    }, 8000);
   },
 
   beforeUnmount() {
@@ -468,12 +599,130 @@ export default {
     this._unsubUser?.();
     Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
     if (this.animFrame) cancelAnimationFrame(this.animFrame);
+    if (this._depositCheckInterval) clearInterval(this._depositCheckInterval);
   },
 
   methods: {
-    // ══════════════════════════════════
-    // AUTH & INITIALIZATION
-    // ══════════════════════════════════
+    // ==================== TONCENTER INTEGRATION ====================
+    
+    async fetchTonCenterTransactions() {
+      try {
+        const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        const url = `${TONCENTER_API_URL}/getTransactions?address=${HOUSE_WALLET}&limit=50`;
+        
+        const response = await fetch(proxyUrl + url, {
+          headers: {
+            'X-API-Key': TONCENTER_API_KEY
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return data.result || [];
+        
+      } catch (e) {
+        console.error('TonCenter API error:', e);
+        return [];
+      }
+    },
+    
+    async checkPendingDeposits() {
+      if (!this.user) return;
+      
+      try {
+        const pendingQuery = query(
+          collection(db, 'deposit_requests'),
+          where('userId', '==', this.user.id),
+          where('status', '==', 'pending'),
+          limit(10)
+        );
+        
+        const snapshot = await getDocs(pendingQuery);
+        if (snapshot.empty) return;
+        
+        const transactions = await this.fetchTonCenterTransactions();
+        if (!transactions || transactions.length === 0) return;
+        
+        for (const docSnapshot of snapshot.docs) {
+          const deposit = docSnapshot.data();
+          
+          if (this._lastCheckedTx[deposit.id]) continue;
+          
+          for (const tx of transactions) {
+            if (!tx.comment) continue;
+            
+            const cleanComment = tx.comment.replace(/\0/g, '').trim();
+            const expectedComment = deposit.comment.replace(/\0/g, '').trim();
+            
+            if (cleanComment.includes(expectedComment) || 
+                expectedComment.includes(cleanComment)) {
+              
+              await this.processDeposit(docSnapshot.ref, deposit, tx);
+              this._lastCheckedTx[deposit.id] = true;
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error checking deposits:', e);
+      }
+    },
+    
+    async processDeposit(docRef, deposit, tx) {
+      try {
+        await runTransaction(db, async (transaction) => {
+          const userRef = doc(db, 'users', deposit.userId);
+          const userSnap = await transaction.get(userRef);
+          
+          if (!userSnap.exists()) {
+            throw new Error('User not found');
+          }
+          
+          transaction.update(userRef, {
+            balance: increment(deposit.amount)
+          });
+          
+          transaction.update(docRef, {
+            status: 'completed',
+            txHash: tx.hash,
+            completedAt: serverTimestamp()
+          });
+        });
+        
+        await addDoc(collection(db, 'users', deposit.userId, 'history'), {
+          type: 'deposit',
+          amount: deposit.amount,
+          txHash: tx.hash,
+          ts: serverTimestamp()
+        });
+        
+        const statsRef = doc(db, 'config', 'stats');
+        await setDoc(statsRef, {
+          totalDeposits: increment(deposit.amount),
+          totalTransactions: increment(1)
+        }, { merge: true });
+        
+        this.showToast(`✅ +${this.fmt(deposit.amount)} TON deposited!`);
+        
+        if (this.user?.id === deposit.userId && this.modal === 'deposit') {
+          this.depositStatus = 'Transaction confirmed!';
+          this.depositDone = true;
+          
+          setTimeout(() => {
+            this.closeModal();
+          }, 2000);
+        }
+        
+      } catch (e) {
+        console.error('Error processing deposit:', e);
+      }
+    },
+
+    // ==================== AUTH ====================
+    
     tryTelegram() {
       const tg = window.Telegram?.WebApp;
       if (tg?.initDataUnsafe?.user) {
@@ -484,11 +733,9 @@ export default {
           id: String(u.id),
           name: u.first_name + (u.last_name ? ' ' + u.last_name : ''),
           handle: u.username || String(u.id),
-          emoji: EMOJIS[u.id % EMOJIS.length],
         });
       } else {
-        // Fallback for local testing if Telegram object is not available
-        // this.quickLogin();
+        this.quickLogin();
       }
     },
 
@@ -498,58 +745,61 @@ export default {
         id: String(id),
         name: `Player${id}`,
         handle: `p${id}`,
-        emoji: EMOJIS[id % EMOJIS.length],
       });
     },
 
     async doLogin(userData) {
+      userData.emoji = EMOJIS[randInt(EMOJIS.length)];
       this.user = userData;
+      
       try {
         const userRef = doc(db, 'users', userData.id);
         const userSnap = await getDoc(userRef);
 
         if (!userSnap.exists()) {
-          // New user: create record and update global stats
           await runTransaction(db, async (transaction) => {
             transaction.set(userRef, {
-              name: userData.name, handle: userData.handle, emoji: userData.emoji,
-              balance: 0, stats: { played: 0, won: 0, earned: 0 },
+              name: userData.name,
+              handle: userData.handle,
+              emoji: userData.emoji,
+              balance: 0,
+              stats: { played: 0, won: 0, earned: 0 },
               createdAt: serverTimestamp(),
             });
             const statsRef = doc(db, 'config', 'stats');
             transaction.set(statsRef, { totalUsers: increment(1) }, { merge: true });
           });
         } else {
-          // Existing user, update info if changed
-          if (userSnap.data().name !== userData.name || userSnap.data().handle !== userData.handle) {
-            await updateDoc(userRef, { name: userData.name, handle: userData.handle, emoji: userData.emoji });
+          await updateDoc(userRef, { lastSeen: serverTimestamp() });
+          
+          const existingData = userSnap.data();
+          if (existingData.emoji) {
+            this.user.emoji = existingData.emoji;
           }
         }
 
-        // Listen for user data (balance, stats) in real-time
         this._unsubUser = onSnapshot(userRef, (snap) => {
           if (!snap.exists()) return;
           const d = snap.data();
           this.balance = d.balance || 0;
-          this.stats   = d.stats || { played: 0, won: 0, earned: 0 };
+          this.stats = d.stats || { played: 0, won: 0, earned: 0 };
         });
 
         await this.loadHistory();
         this.subscribeGame();
+        this.isConnected = true;
 
       } catch (e) {
         console.error('Firebase login error:', e);
         this.showToast('Could not connect to server.');
-        // Provide some offline data for UI testing if connection fails
         this.balance = 100;
         this.isConnected = true;
         this.$nextTick(() => this.drawWheel());
       }
     },
 
-    // ══════════════════════════════════
-    // AUTOMATED GAME FLOW
-    // ══════════════════════════════════
+    // ==================== GAME LOGIC ====================
+    
     subscribeGame() {
       const gameRef = doc(db, 'config', 'currentGame');
       let prevStatus = '';
@@ -558,7 +808,6 @@ export default {
         this.isConnected = true;
 
         if (!snap.exists()) {
-          // If no game doc exists, an admin must create the first one.
           if (this.isAdmin) await this.createFirestoreRound();
           this.$nextTick(() => this.drawWheel());
           return;
@@ -567,14 +816,16 @@ export default {
         const d = snap.data();
         this.game = {
           id: snap.id,
-          players:   d.players   || [],
-          totalBet:  d.totalBet  || 0,
-          status:    d.status,
-          endsAt:    d.endsAt?.toMillis?.() || null,
-          winnerId:  d.winnerId  || null,
+          players: d.players || [],
+          totalBet: d.totalBet || 0,
+          status: d.status,
+          endsAt: d.endsAt?.toMillis?.() || null,
+          spinStartTime: d.spinStartTime?.toMillis?.() || null,
+          spinDuration: d.spinDuration || 6000,
+          winner: d.winner || null
         };
 
-        // --- Core State Machine ---
+        // Handle state changes
         if (d.status === 'waiting' && prevStatus !== 'waiting') {
           this.isSpinning = false;
           this.winner = null;
@@ -583,24 +834,24 @@ export default {
         else if (d.status === 'spinning' && prevStatus !== 'spinning') {
           this.isSpinning = true;
           this.stopTimer();
-          const winnerPlayer = (d.players || []).find(p => p.userId === d.winnerId);
-          if (winnerPlayer) {
-            setTimeout(() => this.animateSpin(winnerPlayer), 600);
-          }
+          
+          // Запускаем синхронизированную анимацию
+          this.startSyncedSpin(d.winner, d.spinStartTime, d.spinDuration);
         }
         else if (d.status === 'waiting_for_players' && prevStatus !== 'waiting_for_players') {
           this.isSpinning = false;
           this.winner = null;
           this.spinAngle = 0;
+          this.spinProgress = 0;
           this.timeLeft = ROUND_TIME;
           this.stopTimer();
         }
 
         prevStatus = d.status;
-        this.drawWheel(); // Redraw wheel on any change
+        this.drawWheel();
       }, err => {
         console.error('Game snapshot error:', err);
-        this.showToast('Connection error: ' + err.message);
+        this.showToast('Connection error');
         this.isConnected = false;
       });
     },
@@ -610,36 +861,42 @@ export default {
       this.timerHandle = setInterval(() => {
         if (this.isSpinning || this.game.status !== 'waiting') return;
 
-        // Sync local timer with server time
-        this.timeLeft = this.game.endsAt ? Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000)) : 0;
+        this.timeLeft = this.game.endsAt 
+          ? Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000)) 
+          : 0;
 
         if (this.timeLeft <= 0) {
           this.stopTimer();
-          // Any client can attempt to trigger the end of the round.
-          // Firestore transactions will prevent race conditions.
           this.triggerRoundEnd();
         }
       }, 500);
     },
 
     stopTimer() {
-      if (this.timerHandle) { clearInterval(this.timerHandle); this.timerHandle = null; }
+      if (this.timerHandle) { 
+        clearInterval(this.timerHandle); 
+        this.timerHandle = null; 
+      }
     },
 
     async createFirestoreRound() {
-       // This function resets the game to a clean slate.
       try {
         await setDoc(doc(db, 'config', 'currentGame'), {
-          players: [], totalBet: 0,
+          players: [], 
+          totalBet: 0,
           status: 'waiting_for_players',
-          endsAt: null, winnerId: null, createdAt: serverTimestamp(),
+          endsAt: null, 
+          winner: null,
+          spinStartTime: null,
+          spinDuration: 6000,
+          createdAt: serverTimestamp(),
         });
-      } catch (e) { console.error('Create round error:', e); }
+      } catch (e) { 
+        console.error('Create round error:', e); 
+      }
     },
 
     async triggerRoundEnd(force = false) {
-      // This is the core function to end a round and pick a winner.
-      // It uses a transaction to ensure it only runs once per round.
       if (this.isSpinning) return;
 
       try {
@@ -647,37 +904,198 @@ export default {
           const gameRef = doc(db, 'config', 'currentGame');
           const gameDoc = await transaction.get(gameRef);
 
-          if (!gameDoc.exists()) throw new Error("Game does not exist.");
+          if (!gameDoc.exists()) return;
 
           const gd = gameDoc.data();
-          // Only proceed if the round is active and either forced or time is up
+          
           if (gd.status === 'waiting' && (force || Date.now() >= (gd.endsAt?.toMillis() || 0))) {
-            if (gd.players.length < 2) {
-              // Not enough players, reset the round
-              transaction.set(gameRef, {
-                players: [], totalBet: 0, status: 'waiting_for_players',
-                endsAt: null, winnerId: null, createdAt: serverTimestamp(),
+            if (!gd.players || gd.players.length < 2) {
+              transaction.update(gameRef, {
+                endsAt: new Date(Date.now() + ROUND_TIME * 1000)
               });
             } else {
               const winner = weightedRandom(gd.players);
-              transaction.update(gameRef, { status: 'spinning', winnerId: winner.userId });
+              const prize = gd.totalBet * (1 - HOUSE_FEE);
+              
+              transaction.update(gameRef, { 
+                status: 'spinning',
+                winner: {
+                  userId: winner.userId,
+                  name: winner.name,
+                  prize: prize
+                },
+                spinStartTime: serverTimestamp(),
+                spinDuration: 6000
+              });
             }
           }
-          // If status is not 'waiting', another client already triggered this. Do nothing.
         });
       } catch (e) {
         console.error("Failed to end round: ", e);
       }
     },
 
+    // Синхронизированная анимация вращения
+    startSyncedSpin(winnerData, spinStartTime, spinDuration) {
+      if (!winnerData || !spinStartTime) return;
+      
+      this.isSpinning = true;
+      
+      // Рассчитываем прогресс на основе серверного времени
+      const now = Date.now();
+      const elapsed = now - spinStartTime;
+      const progress = Math.min(1, Math.max(0, elapsed / spinDuration));
+      
+      this.spinProgress = progress;
+      
+      // Если анимация уже завершена, показываем победителя
+      if (progress >= 1) {
+        this.spinProgress = 1;
+        this.resolveRound(winnerData);
+        return;
+      }
+      
+      // Иначе запускаем анимацию с правильным прогрессом
+      this.animateSyncedSpin(winnerData, spinStartTime, spinDuration);
+    },
 
-    // ══════════════════════════════════
-    // USER ACTIONS (BETTING)
-    // ══════════════════════════════════
+    animateSyncedSpin(winnerData, spinStartTime, spinDuration) {
+      if (!this.game.players.length) return;
+
+      // Находим угол победителя
+      const total = this.game.totalBet;
+      let currentAngle = 0, winStart = 0, winEnd = 0;
+
+      for (const p of this.game.players) {
+        const sweep = (p.bet / total) * Math.PI * 2;
+        if (p.userId === winnerData.userId) {
+          winStart = currentAngle;
+          winEnd = currentAngle + sweep;
+        }
+        currentAngle += sweep;
+      }
+
+      const winMidPoint = winStart + (winEnd - winStart) / 2;
+      const pointerOffset = -Math.PI / 2;
+      const targetBase = pointerOffset - winMidPoint;
+      const randomSpins = 6 + (winnerData.userId.charCodeAt(0) % 3); // Детерминированные обороты
+      const targetAngle = targetBase + randomSpins * Math.PI * 2;
+
+      const startAng = this.spinAngle;
+      
+      const animate = () => {
+        const now = Date.now();
+        const elapsed = now - spinStartTime;
+        let progress = Math.min(1, Math.max(0, elapsed / spinDuration));
+        
+        this.spinProgress = progress;
+        
+        // Easing function
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+        this.spinAngle = startAng + (targetAngle - startAng) * easeOut;
+        
+        this.drawWheel();
+
+        if (progress < 1) {
+          this.animFrame = requestAnimationFrame(animate);
+        } else {
+          this.spinAngle = targetAngle;
+          this.drawWheel();
+          this.resolveRound(winnerData);
+        }
+      };
+      
+      this.animFrame = requestAnimationFrame(animate);
+    },
+
+    async resolveRound(winnerData) {
+      if (!winnerData) return;
+      
+      const isWinnerMe = winnerData.userId === this.user.id;
+      const myBet = this.game.players.find(p => p.userId === this.user.id);
+
+      try {
+        const batch = writeBatch(db);
+
+        // Pay winner
+        batch.update(doc(db, 'users', winnerData.userId), {
+          balance: increment(winnerData.prize),
+          'stats.won': increment(1),
+          'stats.played': increment(1),
+          'stats.earned': increment(winnerData.prize),
+        });
+
+        // Update stats for losers
+        this.game.players.forEach(p => {
+          if (p.userId !== winnerData.userId) {
+            batch.update(doc(db, 'users', p.userId), { 
+              'stats.played': increment(1) 
+            });
+          }
+        });
+
+        // Update global stats
+        const statsRef = doc(db, 'config', 'stats');
+        batch.set(statsRef, {
+          totalGames: increment(1),
+          totalVolume: increment(this.game.totalBet),
+          houseBalance: increment(this.game.totalBet * HOUSE_FEE),
+        }, { merge: true });
+
+        // Reset game
+        const gameRef = doc(db, 'config', 'currentGame');
+        batch.update(gameRef, {
+          status: 'waiting_for_players',
+          players: [],
+          totalBet: 0,
+          winner: null,
+          spinStartTime: null,
+          endsAt: new Date(Date.now() + ROUND_TIME * 1000)
+        });
+
+        await batch.commit();
+
+        // Add to history
+        if (myBet) {
+          await addDoc(collection(db, 'users', this.user.id, 'history'), {
+            won: isWinnerMe,
+            amount: isWinnerMe ? winnerData.prize - myBet.bet : myBet.bet,
+            ts: serverTimestamp(),
+            gameId: this.game.id,
+          });
+          this.loadHistory();
+        }
+      } catch (e) { 
+        console.error('Error resolving round:', e); 
+      }
+
+      // Show winner overlay
+      this.winner = {
+        name: winnerData.name,
+        prize: winnerData.prize,
+        isMe: isWinnerMe,
+        myLoss: myBet && !isWinnerMe ? myBet.bet : 0,
+      };
+      
+      this.isSpinning = false;
+    },
+
+    dismissWinner() { 
+      this.winner = null; 
+    },
+
+    // ==================== BETTING ====================
+    
+    adjustBet(delta) {
+      const newAmount = +(this.betAmount + delta).toFixed(1);
+      this.betAmount = Math.max(0.1, Math.min(this.balance, newAmount));
+    },
+
     async placeBet() {
       if (!this.canBet) return;
+      
       this.betLoading = true;
-      this.betError   = '';
+      this.betError = '';
 
       const gameRef = doc(db, 'config', 'currentGame');
       const userRef = doc(db, 'users', this.user.id);
@@ -689,44 +1107,49 @@ export default {
             transaction.get(userRef),
           ]);
 
-          if (!gameDoc.exists()) throw new Error("No active game to join.");
-          if (!userDoc.exists()) throw new Error("User data not found.");
+          if (!gameDoc.exists()) throw new Error("No active game");
+          if (!userDoc.exists()) throw new Error("User not found");
 
           const gd = gameDoc.data();
           const bal = userDoc.data().balance || 0;
 
-          if (bal < this.betAmount) throw new Error('Insufficient balance.');
-          if (gd.status !== 'waiting' && gd.status !== 'waiting_for_players') throw new Error('Round has already started.');
-          if ((gd.players || []).some(p => p.userId === this.user.id)) throw new Error('You have already placed a bet.');
-
-          // --- Perform Updates ---
-          // 1. Debit user balance
-          transaction.update(userRef, { balance: increment(-this.betAmount) });
-
-          // 2. Add user to player list and update game data
-          const newPlayer = {
-            userId: this.user.id, name: this.user.name,
-            emoji: this.user.emoji, bet: this.betAmount,
-          };
-
-          const gameUpdates = {
-            players: [...gd.players, newPlayer],
-            totalBet: increment(this.betAmount),
-          };
-
-          // 3. If this is the FIRST bet, start the countdown timer
-          if (gd.status === 'waiting_for_players') {
-            gameUpdates.status = 'waiting';
-            gameUpdates.endsAt = new Date(Date.now() + ROUND_TIME * 1000);
+          if (bal < this.betAmount) throw new Error('Insufficient balance');
+          if (gd.status === 'spinning') throw new Error('Round is spinning');
+          if ((gd.players || []).some(p => p.userId === this.user.id)) {
+            throw new Error('Already placed bet');
           }
-          transaction.update(gameRef, gameUpdates);
+
+          transaction.update(userRef, { 
+            balance: increment(-this.betAmount) 
+          });
+
+          const newPlayer = {
+            userId: this.user.id,
+            name: this.user.name,
+            emoji: this.user.emoji,
+            bet: this.betAmount,
+          };
+
+          const players = [...(gd.players || []), newPlayer];
+          const totalBet = (gd.totalBet || 0) + this.betAmount;
+          
+          const updates = {
+            players: players,
+            totalBet: totalBet,
+          };
+
+          if (gd.status === 'waiting_for_players') {
+            updates.status = 'waiting';
+            updates.endsAt = new Date(Date.now() + ROUND_TIME * 1000);
+          }
+
+          transaction.update(gameRef, updates);
         });
 
-        // Trigger haptic feedback on success
         this.getTg()?.HapticFeedback?.notificationOccurred('success');
 
       } catch (e) {
-        this.betError = e.message || 'An error occurred placing your bet.';
+        this.betError = e.message;
         setTimeout(() => { this.betError = ''; }, 3500);
         this.getTg()?.HapticFeedback?.notificationOccurred('error');
       } finally {
@@ -734,178 +1157,88 @@ export default {
       }
     },
 
-    // ══════════════════════════════════
-    // SPIN ANIMATION & PAYOUT
-    // ══════════════════════════════════
-    animateSpin(winnerPlayer) {
-      if (!this.game.players.length) return;
-
-      const total = this.game.totalBet;
-      let currentAngle = 0, winStart = 0, winEnd = 0;
-
-      // Find the angular position of the winner on the wheel
-      for (const p of this.game.players) {
-        const sweep = (p.bet / total) * Math.PI * 2;
-        if (p.userId === winnerPlayer.userId) {
-          winStart = currentAngle;
-          winEnd = currentAngle + sweep;
-        }
-        currentAngle += sweep;
-      }
-
-      const winMidPoint = winStart + (winEnd - winStart) / 2;
-      const pointerOffset = -Math.PI / 2; // Pointer is at the top (negative Y-axis)
-      const targetBase = pointerOffset - winMidPoint;
-      const randomSpins = 6 + Math.random() * 3;
-      const targetAngle = targetBase + randomSpins * Math.PI * 2;
-
-      const duration  = 6000; // ms
-      const t0        = performance.now();
-      const startAng  = this.spinAngle;
-      // Ease-out cubic function: starts fast, ends slow
-      const ease = t => 1 - Math.pow(1 - t, 3);
-
-      const tick = (now) => {
-        const t = Math.min((now - t0) / duration, 1);
-        this.spinAngle = startAng + (targetAngle - startAng) * ease(t);
-        this.drawWheel();
-
-        if (t < 1) {
-          this.animFrame = requestAnimationFrame(tick);
-        } else {
-          // Normalize angle to keep it within 0 to 2*PI for the next spin
-          this.spinAngle = ((targetAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-          this.drawWheel();
-          this.resolveRound(winnerPlayer);
-        }
-      };
-      this.animFrame = requestAnimationFrame(tick);
-    },
-
-    async resolveRound(winnerPlayer) {
-      const prize = +(this.game.totalBet * (1 - HOUSE_FEE)).toFixed(2);
-      const houseCut = +(this.game.totalBet - prize).toFixed(2);
-      const isWinnerMe = winnerPlayer.userId === this.user.id;
-      const myBet = this.game.players.find(p => p.userId === this.user.id);
-
-      // --- Update User/Game Stats in a Batch ---
-      try {
-        const batch = writeBatch(db);
-
-        // 1. Pay winner and update their stats
-        batch.update(doc(db, 'users', winnerPlayer.userId), {
-          balance: increment(prize),
-          'stats.won': increment(1),
-          'stats.played': increment(1),
-          'stats.earned': increment(prize),
-        });
-
-        // 2. Update stats for all losing players
-        this.game.players.forEach(p => {
-          if (p.userId !== winnerPlayer.userId) {
-            batch.update(doc(db, 'users', p.userId), { 'stats.played': increment(1) });
-          }
-        });
-
-        // 3. Update global game statistics
-        const statsRef = doc(db, 'config', 'stats');
-        batch.set(statsRef, {
-          totalGames: increment(1),
-          totalVolume: increment(this.game.totalBet),
-          houseBalance: increment(houseCut),
-        }, { merge: true });
-
-        await batch.commit();
-
-        // 4. Add result to current user's history (if they played)
-        if (myBet) {
-          await addDoc(collection(db, 'users', this.user.id, 'history'), {
-            won: isWinnerMe,
-            amount: isWinnerMe ? prize - myBet.bet : myBet.bet,
-            ts: serverTimestamp(),
-            gameId: this.game.id,
-          });
-          this.loadHistory(); // Refresh history list
-        }
-      } catch (e) { console.error('Error resolving round:', e); }
-
-      // --- Display Winner Overlay ---
-      this.winner = {
-        name: winnerPlayer.name,
-        prize: prize,
-        isMe: isWinnerMe,
-        myLoss: myBet && !isWinnerMe ? myBet.bet : 0,
-      };
-
-      // --- Prepare for Next Round ---
-      // After a delay, reset the game state
-      setTimeout(() => {
-        // Any client can attempt to create the new round. The `setDoc` operation is atomic.
-        // It's safe for multiple clients to call this; only one new round document will be created.
-        this.createFirestoreRound();
-      }, 5000); // 5-second delay before next round starts
-    },
-
-    dismissWinner() { this.winner = null; },
-
-
-    // ══════════════════════════════════
-    // DRAWING & UTILS
-    // ══════════════════════════════════
+    // ==================== WHEEL DRAWING ====================
+    
     drawWheel() {
       const canvas = this.$refs.wheelCanvas;
       if (!canvas) return;
+      
       const ctx = canvas.getContext('2d');
       const [w, h] = [canvas.width, canvas.height];
-      const cx = w / 2, cy = h / 2, r = w / 2 - 12; // Radius with padding
+      const cx = w / 2, cy = h / 2;
+      const r = w / 2 - 12;
+      
       ctx.clearRect(0, 0, w, h);
 
-      if (!this.game.players.length) {
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = '#141416'; ctx.fill();
-        ctx.strokeStyle = '#2a2a2e'; ctx.lineWidth = 2; ctx.stroke();
-        ctx.fillStyle = 'rgba(255,255,255,0.12)';
-        ctx.font = '13px DM Sans, sans-serif';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(this.game.status === 'spinning' ? 'Drawing...' : 'Waiting for players…', cx, cy);
+      if (!this.game.players || !this.game.players.length) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a1a1f';
+        ctx.fill();
+        ctx.strokeStyle = '#2a2a2e';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.fillStyle = '#6b6b6b';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('no bets', cx, cy);
         return;
       }
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(this.spinAngle);
-      ctx.translate(-cx, -cy);
+      const total = this.game.totalBet;
+      let startAngle = (this.spinAngle * Math.PI) / 180;
 
-      let currentAngle = 0;
-      for (const p of this.game.players) {
-        const sweep = (p.bet / this.game.totalBet) * Math.PI * 2;
-        ctx.beginPath(); ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, r, currentAngle, currentAngle + sweep); ctx.closePath();
-        ctx.fillStyle = this.playerColor(p.userId); ctx.fill();
-        currentAngle += sweep;
+      this.game.players.forEach((player, i) => {
+        const sliceAngle = (player.bet / total) * 2 * Math.PI;
+        const endAngle = startAngle + sliceAngle;
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r, startAngle, endAngle);
+        ctx.closePath();
+        
+        ctx.fillStyle = COLORS[i % COLORS.length];
+        ctx.fill();
+        
+        ctx.strokeStyle = '#0d0d0f';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        if (sliceAngle > 0.15) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(startAngle + sliceAngle / 2);
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = '12px system-ui, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.shadowColor = '#00000080';
+          ctx.shadowBlur = 4;
+          ctx.fillText(player.emoji, 50, 0);
+          ctx.restore();
+        }
+
+        startAngle = endAngle;
+      });
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 35, 0, Math.PI * 2);
+      ctx.fillStyle = '#0d0d0f';
+      ctx.fill();
+      ctx.strokeStyle = '#f0b429';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      // Рисуем прогресс вращения если идет анимация
+      if (this.isSpinning && this.spinProgress > 0 && this.spinProgress < 1) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, 0, this.spinProgress * Math.PI * 2);
+        ctx.strokeStyle = '#f0b429';
+        ctx.lineWidth = 3;
+        ctx.stroke();
       }
-
-      ctx.restore(); // Restore context to draw static elements
-
-      // Draw outlines between segments
-      currentAngle = 0;
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(this.spinAngle);
-      ctx.translate(-cx, -cy);
-      for (const p of this.game.players) {
-          const sweep = (p.bet / this.game.totalBet) * Math.PI * 2;
-          ctx.beginPath(); ctx.moveTo(cx, cy);
-          ctx.arc(cx, cy, r, currentAngle, currentAngle + sweep);
-          ctx.lineTo(cx, cy);
-          ctx.strokeStyle = '#0d0d0f'; ctx.lineWidth = 1.5; ctx.stroke();
-          currentAngle += sweep;
-      }
-      ctx.restore();
-
-      // Outer border
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 3; ctx.stroke();
     },
 
     getTimerWidth() {
@@ -913,183 +1246,337 @@ export default {
       return `${(this.timeLeft / ROUND_TIME) * 100}%`;
     },
 
-    fmt(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
-
     playerColor(userId) {
-      const hash = String(userId).split('').reduce((a, b) => (a + b.charCodeAt(0)) & 0xFFFFFFFF, 0);
-      return COLORS[hash % COLORS.length];
+      const index = this.game.players.findIndex(p => p.userId === userId);
+      return COLORS[index % COLORS.length];
     },
 
-    playerChance(p) {
-      if (!this.game.totalBet || p.bet <= 0) return '0.0';
-      return (p.bet / this.game.totalBet * 100).toFixed(1);
+    playerChance(player) {
+      const total = this.game.totalBet || 1;
+      return ((player.bet / total) * 100).toFixed(1);
     },
 
-    adjustBet(delta) {
-      const newAmount = +(this.betAmount + delta).toFixed(1);
-      this.betAmount = Math.max(0.1, Math.min(this.balance, newAmount));
-    },
-
-    showToast(msg) {
-      this.toastMsg = msg;
-      clearTimeout(this._toastTimer);
-      this._toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3200);
-    },
+    // ==================== MODAL METHODS ====================
     
-    // Minimal helper to get Telegram object if it exists
-    getTg() { return window.Telegram?.WebApp; },
-
-    // --- All other methods (modals, copy, admin, etc.) remain as they were in the original code ---
-    // --- The logic inside them is sound for a manual approval system. ---
-
-    // ... (Your existing methods for modals, admin, profile, etc.)
-    // (Collapsed for brevity - NO CHANGES NEEDED to these methods)
-    async loadHistory() {
-      try {
-        const q = query(collection(db, `users/${this.user.id}/history`), orderBy('ts', 'desc'), limit(20));
-        const snap = await getDocs(q);
-        this.history = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      } catch(e) { console.warn("Could not load history", e.message); }
-    },
     openModal(type) {
       this.modal = type;
-      this.depositStep     = 1;
-      this.depositDone     = false;
-      this.depositLoading  = false;
-      this.depositTxHash   = '';
-      this.withdrawDone    = false;
-      this.withdrawLoading = false;
-      this.withdrawWallet  = this.user.wallet || ''; // Pre-fill if saved
-      this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0, 30);
+      
+      if (type === 'deposit') {
+        this.depositStep = 1;
+        this.depositAmt = 10;
+        this.depositDone = false;
+        this.depositLoading = false;
+        this.depositStatus = 'Waiting for transaction...';
+        this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0, 30);
+      } else if (type === 'withdraw') {
+        this.withdrawAmt = 10;
+        this.withdrawWallet = '';
+        this.withdrawLoading = false;
+        this.withdrawSuccess = false;
+      }
     },
-    closeModal() { this.modal = null; },
+    
+    closeModal() { 
+      this.modal = null;
+    },
+    
     openTonLink() {
       const nano = Math.round(this.depositAmt * 1e9);
       const comment = encodeURIComponent(this.currentDepComment);
       window.open(`ton://transfer/${HOUSE_WALLET}?amount=${nano}&text=${comment}`, '_blank');
     },
-    async copyText(text, msg) {
+    
+    async copyText(text) {
       try {
         await navigator.clipboard.writeText(text);
-        this.showToast(msg || 'Copied!');
+        this.showToast('Copied!');
       } catch (err) {
         this.showToast('Failed to copy');
       }
     },
+    
     async submitDepositRequest() {
       this.depositLoading = true;
+      
       try {
         await addDoc(collection(db, 'deposit_requests'), {
-          userId: this.user.id, userName: this.user.name, userHandle: this.user.handle,
-          amount: this.depositAmt, txHash: this.depositTxHash || '',
-          comment: this.currentDepComment, status: 'pending', ts: serverTimestamp(),
+          userId: this.user.id,
+          userName: this.user.name,
+          userHandle: this.user.handle,
+          amount: this.depositAmt,
+          comment: this.currentDepComment,
+          status: 'pending',
+          ts: serverTimestamp(),
         });
-        this.depositDone = true;
+        
+        this.depositStep = 3;
+        this.depositLoading = false;
+        this.depositStatus = 'Waiting for blockchain confirmation...';
+        
+        setTimeout(() => {
+          this.checkPendingDeposits();
+        }, 5000);
+        
         this.getTg()?.HapticFeedback?.notificationOccurred('success');
-      } catch (e) { this.showToast('Error: ' + e.message); } finally { this.depositLoading = false; }
+        
+      } catch (e) { 
+        this.showToast('Error: ' + e.message); 
+        this.depositLoading = false;
+      }
     },
+    
     async submitWithdrawRequest() {
-      if (this.withdrawAmt < 0.1 || this.withdrawAmt > this.balance || !this.withdrawWallet) return;
+      if (!this.canWithdraw) return;
+      
       this.withdrawLoading = true;
+      
       try {
-        await updateDoc(doc(db, 'users', this.user.id), { balance: increment(-this.withdrawAmt) });
-        await addDoc(collection(db, 'withdraw_requests'), {
-          userId: this.user.id, userName: this.user.name, userHandle: this.user.handle,
-          amount: this.withdrawAmt, wallet: this.withdrawWallet, status: 'pending', ts: serverTimestamp(),
+        await runTransaction(db, async (transaction) => {
+          const userRef = doc(db, 'users', this.user.id);
+          const userSnap = await transaction.get(userRef);
+          
+          if (!userSnap.exists()) throw new Error('User not found');
+          
+          const userData = userSnap.data();
+          if (userData.balance < this.withdrawAmt) {
+            throw new Error('Insufficient balance');
+          }
+          
+          transaction.update(userRef, {
+            balance: increment(-this.withdrawAmt),
+            lockedBalance: increment(this.withdrawAmt)
+          });
+          
+          const withdrawRef = doc(collection(db, 'withdraw_requests'));
+          transaction.set(withdrawRef, {
+            userId: this.user.id,
+            userName: this.user.name,
+            userHandle: this.user.handle,
+            amount: this.withdrawAmt,
+            wallet: this.withdrawWallet.trim(),
+            status: 'pending',
+            ts: serverTimestamp()
+          });
         });
-        this.withdrawDone = true;
+        
+        this.withdrawSuccess = true;
         this.showToast('Withdrawal request submitted!');
+        
+        setTimeout(() => {
+          this.closeModal();
+        }, 2000);
+        
       } catch (e) {
         this.showToast('Error: ' + e.message);
-        // Refund if request fails
-        await updateDoc(doc(db, 'users', this.user.id), { balance: increment(this.withdrawAmt) });
-      } finally { this.withdrawLoading = false; }
+      } finally {
+        this.withdrawLoading = false;
+      }
     },
-    switchAdmin() {
-      this.tab = 'admin'; this.subscribeAdmin();
-    },
-    async subscribeAdmin() {
-      Object.values(this._unsubAdmin).forEach(unsub => unsub?.()); // Unsubscribe from previous listeners
-      try {
-        const snap = await getDoc(doc(db, 'config', 'stats'));
-        if (snap.exists()) { Object.assign(this.adminData, snap.data()); }
-        const uSnap = await getDocs(query(collection(db, 'users'), orderBy('balance', 'desc'), limit(100)));
-        this.adminData.users = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        this.adminData.totalUsers = this.adminData.users.length; // More accurate count
-      } catch (e) { console.error('Admin data load error:', e); }
 
-      this._unsubAdmin.deposits = onSnapshot(query(collection(db, 'deposit_requests'), where('status', '==', 'pending'), orderBy('ts', 'desc')), snap => {
-        this.adminData.deposits = snap.docs.map(d => ({ id: d.id, ...d.data(), processing: false }));
-      });
-      this._unsubAdmin.withdraws = onSnapshot(query(collection(db, 'withdraw_requests'), where('status', '==', 'pending'), orderBy('ts', 'desc')), snap => {
-        this.adminData.withdraws = snap.docs.map(d => ({ id: d.id, ...d.data(), processing: false }));
-      });
-    },
-    async approveDeposit(r) {
-      r.processing = true;
+    // ==================== PROFILE METHODS ====================
+    
+    async loadHistory() {
       try {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'users', r.userId), { balance: increment(r.amount) });
-        batch.update(doc(db, 'deposit_requests', r.id), { status: 'approved', approvedAt: serverTimestamp() });
-        await batch.commit();
-        this.showToast(`✓ +${r.amount} TON → ${r.userName}`);
-      } catch (e) { this.showToast('Error: ' + e.message); r.processing = false; }
+        const q = query(
+          collection(db, 'users', this.user.id, 'history'),
+          orderBy('ts', 'desc'),
+          limit(20)
+        );
+        const snap = await getDocs(q);
+        this.history = snap.docs.map(d => ({ 
+          id: d.id, 
+          ...d.data(),
+          ts: d.data().ts?.toMillis() || Date.now()
+        }));
+      } catch(e) { 
+        console.warn("Could not load history", e.message); 
+      }
     },
-    async rejectDeposit(r) {
-      r.processing = true;
+
+    // ==================== ADMIN METHODS ====================
+    
+    switchAdmin() {
+      this.tab = 'admin';
+      this.subscribeAdmin();
+    },
+    
+    async subscribeAdmin() {
+      Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
+      
       try {
-        await updateDoc(doc(db, 'deposit_requests', r.id), { status: 'rejected', rejectedAt: serverTimestamp() });
-        this.showToast('Deposit rejected');
-      } catch (e) { this.showToast('Error: ' + e.message); r.processing = false; }
+        const statsSnap = await getDoc(doc(db, 'config', 'stats'));
+        if (statsSnap.exists()) { 
+          Object.assign(this.adminData, statsSnap.data()); 
+        }
+        
+        const uSnap = await getDocs(
+          query(collection(db, 'users'), orderBy('balance', 'desc'), limit(50))
+        );
+        this.adminData.users = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        this.adminData.totalUsers = this.adminData.users.length;
+        
+        const gamesSnap = await getDocs(collection(db, 'games'));
+        let volume = 0;
+        gamesSnap.forEach(doc => {
+          volume += doc.data().totalBet || 0;
+        });
+        this.adminData.totalGames = gamesSnap.size;
+        this.adminData.totalVolume = volume;
+        
+        let houseBalance = 0;
+        uSnap.docs.forEach(doc => {
+          const data = doc.data();
+          houseBalance += (data.balance || 0) + (data.lockedBalance || 0);
+        });
+        this.adminData.houseBalance = houseBalance;
+        
+      } catch (e) { 
+        console.error('Admin data load error:', e); 
+      }
+
+      this._unsubAdmin.withdraws = onSnapshot(
+        query(
+          collection(db, 'withdraw_requests'), 
+          where('status', '==', 'pending'), 
+          orderBy('ts', 'desc')
+        ),
+        (snap) => {
+          this.adminData.withdraws = snap.docs.map(d => ({ 
+            id: d.id, 
+            ...d.data(), 
+            processing: false,
+            ts: d.data().ts?.toMillis() || Date.now()
+          }));
+        }
+      );
+      
+      this._unsubAdmin.deposits = onSnapshot(
+        query(
+          collection(db, 'deposit_requests'), 
+          orderBy('ts', 'desc'), 
+          limit(20)
+        ),
+        (snap) => {
+          this.adminData.deposits = snap.docs.map(d => ({ 
+            id: d.id, 
+            ...d.data(), 
+            ts: d.data().ts?.toMillis() || Date.now()
+          }));
+        }
+      );
     },
+    
     async approveWithdraw(r) {
       r.processing = true;
       try {
-        await updateDoc(doc(db, 'withdraw_requests', r.id), { status: 'approved', approvedAt: serverTimestamp() });
-        this.showToast(`✓ Send ${r.amount} TON → ${r.wallet}`);
-      } catch (e) { this.showToast('Error: ' + e.message); r.processing = false; }
+        const batch = writeBatch(db);
+        
+        batch.update(doc(db, 'withdraw_requests', r.id), { 
+          status: 'approved', 
+          approvedAt: serverTimestamp(),
+          processedBy: this.user.id
+        });
+        
+        batch.update(doc(db, 'users', r.userId), {
+          lockedBalance: increment(-r.amount)
+        });
+        
+        await batch.commit();
+        
+        await addDoc(collection(db, 'users', r.userId, 'history'), {
+          type: 'withdraw',
+          amount: -r.amount,
+          ts: serverTimestamp()
+        });
+        
+        this.showToast(`✓ Approved ${r.amount} TON for ${r.userName}`);
+      } catch (e) { 
+        this.showToast('Error: ' + e.message); 
+      } finally {
+        r.processing = false;
+      }
     },
+    
     async rejectWithdraw(r) {
       r.processing = true;
       try {
         const batch = writeBatch(db);
-        batch.update(doc(db, 'users', r.userId), { balance: increment(r.amount) }); // Refund
-        batch.update(doc(db, 'withdraw_requests', r.id), { status: 'rejected', rejectedAt: serverTimestamp() });
+        
+        batch.update(doc(db, 'users', r.userId), {
+          balance: increment(r.amount),
+          lockedBalance: increment(-r.amount)
+        });
+        
+        batch.update(doc(db, 'withdraw_requests', r.id), { 
+          status: 'rejected', 
+          rejectedAt: serverTimestamp(),
+          processedBy: this.user.id
+        });
+        
         await batch.commit();
-        this.showToast('Withdrawal rejected, balance refunded');
-      } catch (e) { this.showToast('Error: ' + e.message); r.processing = false; }
+        this.showToast('Withdrawal rejected, funds returned');
+      } catch (e) { 
+        this.showToast('Error: ' + e.message); 
+      } finally {
+        r.processing = false;
+      }
     },
-     async adminAddBalance(u, amount) {
+    
+    async adminAddBalance(u, amount) {
       try {
-        await updateDoc(doc(db, 'users', u.id), { balance: increment(amount) });
-        const userInList = this.adminData.users.find(admU => admU.id === u.id);
-        if (userInList) userInList.balance += amount;
+        await updateDoc(doc(db, 'users', u.id), { 
+          balance: increment(amount) 
+        });
         this.showToast(`+${amount} TON → ${u.name}`);
-      } catch (e) { this.showToast('Error: ' + e.message); }
+      } catch (e) { 
+        this.showToast('Error: ' + e.message); 
+      }
     },
+    
     adminSetBalance(u) {
       const val = prompt(`Set balance for ${u.name} (current: ${u.balance} TON):`);
       if (val === null || isNaN(parseFloat(val))) return;
+      
       const newBal = parseFloat(val);
       updateDoc(doc(db, 'users', u.id), { balance: newBal })
-        .then(() => {
-          const userInList = this.adminData.users.find(admU => admU.id === u.id);
-          if (userInList) userInList.balance = newBal;
-          this.showToast(`Balance → ${newBal} TON`);
-        })
+        .then(() => this.showToast(`Balance → ${newBal} TON`))
         .catch(e => this.showToast('Error: ' + e.message));
     },
+
+    // ==================== UTILITIES ====================
+    
+    fmt(num) {
+      if (num === undefined || num === null) return '0.00';
+      return num.toFixed(2);
+    },
+
+    formatTime(timestamp) {
+      if (!timestamp) return '';
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+
+    showToast(msg) {
+      this.toastMsg = msg;
+      clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => {
+        this.toastMsg = '';
+      }, 3000);
+    },
+    
+    getTg() { 
+      return window.Telegram?.WebApp; 
+    },
+
     async copyRef() {
       try {
         await navigator.clipboard.writeText(this.referralLink);
         this.copied = true;
         setTimeout(() => { this.copied = false; }, 2000);
-      } catch {}
-    },
-    formatTime(ts) {
-      if (!ts) return '';
-      const d = ts.toDate ? ts.toDate() : new Date(ts);
-      return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+        this.showToast('Referral link copied!');
+      } catch (e) {
+        console.error('Copy failed:', e);
+      }
     },
   },
 };
