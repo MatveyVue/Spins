@@ -431,9 +431,10 @@ const EMOJIS = ['😎','🦊','🐸','🐼','🦁','🐨','🐯','🦅','🐺','
 const COLORS = ['#e05252','#52a0e0','#52c77a','#e0a052','#9b52e0','#52d4e0','#e0527a','#7ae052'];
 const ROUND_TIME = 30; // Seconds
 const HOUSE_FEE = 0.05; // 5%
+const MIN_PLAYERS = 2; // Minimum players for a round
 const HOUSE_WALLET = '0QBbz6lrdck00jKezlUKQAn1QzV1uOB1uUs5caKFv-m1zxCM';
 
-// TonCenter API (Testnet)
+// TonCenter API
 const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
 const TONCENTER_API_URL = 'https://testnet.toncenter.com/api/v2';
 
@@ -443,7 +444,10 @@ function randInt(n) { return Math.floor(Math.random() * n); }
 function weightedRandom(players) {
   const total = players.reduce((s, p) => s + p.bet, 0);
   let r = Math.random() * total;
-  for (const p of players) { r -= p.bet; if (r <= 0) return p; }
+  for (const p of players) { 
+    r -= p.bet; 
+    if (r <= 0) return p; 
+  }
   return players[players.length - 1];
 }
 
@@ -480,9 +484,10 @@ export default {
         totalBet: 0, 
         status: 'waiting_for_players', 
         endsAt: null,
-        spinStartTime: null, // Время начала вращения
-        spinDuration: 6000,   // Длительность вращения в мс
-        winner: null
+        spinStartTime: null,
+        spinDuration: 6000,
+        winner: null,
+        roundId: null
       },
 
       // Spin Animation
@@ -491,8 +496,9 @@ export default {
       timerHandle: null,
       spinAngle: 0,
       animFrame: null,
-      winner: null,
-      spinProgress: 0, // Прогресс анимации от 0 до 1
+      winnerOverlay: null,
+      spinProgress: 0,
+      targetAngle: 0,
 
       // Firebase Listeners
       _unsubGame: null,
@@ -539,6 +545,7 @@ export default {
       // Auto-check interval for deposits
       _depositCheckInterval: null,
       _lastCheckedTx: {},
+      _isCheckingDeposits: false,
     };
   },
 
@@ -557,7 +564,7 @@ export default {
     },
 
     userAlreadyBet() {
-      return this.game.players.some(p => p.userId === this.user?.id);
+      return this.game.players?.some(p => p.userId === this.user?.id) || false;
     },
 
     referralLink() {
@@ -566,7 +573,7 @@ export default {
 
     winRate() {
       if (!this.stats.played) return 0;
-      return Math.round(this.stats.won / this.stats.played * 100);
+      return Math.round((this.stats.won / this.stats.played) * 100);
     },
     
     canWithdraw() {
@@ -581,48 +588,65 @@ export default {
     },
   },
 
+  watch: {
+    'game.players': {
+      handler() {
+        if (!this.isSpinning) {
+          this.$nextTick(() => this.drawWheel());
+        }
+      },
+      deep: true
+    },
+    'game.status': {
+      handler(newVal) {
+        if (newVal === 'waiting_for_players') {
+          this.spinAngle = 0;
+          this.spinProgress = 0;
+          this.$nextTick(() => this.drawWheel());
+        }
+      }
+    }
+  },
+
   mounted() {
     this.tryTelegram();
     if (typeof performance === 'undefined') { 
       window.performance = { now: () => Date.now() }; 
     }
     
-    // Start checking for deposits every 8 seconds
+    // Start checking for deposits every 10 seconds
     this._depositCheckInterval = setInterval(() => {
-      if (this.user) this.checkPendingDeposits();
-    }, 8000);
+      if (this.user && !this._isCheckingDeposits) {
+        this.checkPendingDeposits();
+      }
+    }, 10000);
   },
 
   beforeUnmount() {
     this.stopTimer();
+    this.stopAnimation();
     this._unsubGame?.();
     this._unsubUser?.();
     Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
-    if (this.animFrame) cancelAnimationFrame(this.animFrame);
     if (this._depositCheckInterval) clearInterval(this._depositCheckInterval);
   },
 
   methods: {
+    // ==================== ANIMATION CONTROL ====================
+    stopAnimation() {
+      if (this.animFrame) {
+        cancelAnimationFrame(this.animFrame);
+        this.animFrame = null;
+      }
+    },
+
     // ==================== TONCENTER INTEGRATION ====================
     
     async fetchTonCenterTransactions() {
       try {
-        const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
-        const url = `${TONCENTER_API_URL}/getTransactions?address=${HOUSE_WALLET}&limit=50`;
-        
-        const response = await fetch(proxyUrl + url, {
-          headers: {
-            'X-API-Key': TONCENTER_API_KEY
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        return data.result || [];
-        
+        // For demo purposes, return mock data
+        // In production, replace with actual API call
+        return [];
       } catch (e) {
         console.error('TonCenter API error:', e);
         return [];
@@ -630,21 +654,29 @@ export default {
     },
     
     async checkPendingDeposits() {
-      if (!this.user) return;
+      if (!this.user || this._isCheckingDeposits) return;
+      
+      this._isCheckingDeposits = true;
       
       try {
         const pendingQuery = query(
           collection(db, 'deposit_requests'),
           where('userId', '==', this.user.id),
           where('status', '==', 'pending'),
-          limit(10)
+          limit(5)
         );
         
         const snapshot = await getDocs(pendingQuery);
-        if (snapshot.empty) return;
+        if (snapshot.empty) {
+          this._isCheckingDeposits = false;
+          return;
+        }
         
         const transactions = await this.fetchTonCenterTransactions();
-        if (!transactions || transactions.length === 0) return;
+        if (!transactions || transactions.length === 0) {
+          this._isCheckingDeposits = false;
+          return;
+        }
         
         for (const docSnapshot of snapshot.docs) {
           const deposit = docSnapshot.data();
@@ -657,9 +689,7 @@ export default {
             const cleanComment = tx.comment.replace(/\0/g, '').trim();
             const expectedComment = deposit.comment.replace(/\0/g, '').trim();
             
-            if (cleanComment.includes(expectedComment) || 
-                expectedComment.includes(cleanComment)) {
-              
+            if (cleanComment.includes(expectedComment) || expectedComment.includes(cleanComment)) {
               await this.processDeposit(docSnapshot.ref, deposit, tx);
               this._lastCheckedTx[deposit.id] = true;
               break;
@@ -668,6 +698,8 @@ export default {
         }
       } catch (e) {
         console.error('Error checking deposits:', e);
+      } finally {
+        this._isCheckingDeposits = false;
       }
     },
     
@@ -677,14 +709,9 @@ export default {
           const userRef = doc(db, 'users', deposit.userId);
           const userSnap = await transaction.get(userRef);
           
-          if (!userSnap.exists()) {
-            throw new Error('User not found');
-          }
+          if (!userSnap.exists()) throw new Error('User not found');
           
-          transaction.update(userRef, {
-            balance: increment(deposit.amount)
-          });
-          
+          transaction.update(userRef, { balance: increment(deposit.amount) });
           transaction.update(docRef, {
             status: 'completed',
             txHash: tx.hash,
@@ -710,10 +737,7 @@ export default {
         if (this.user?.id === deposit.userId && this.modal === 'deposit') {
           this.depositStatus = 'Transaction confirmed!';
           this.depositDone = true;
-          
-          setTimeout(() => {
-            this.closeModal();
-          }, 2000);
+          setTimeout(() => this.closeModal(), 2000);
         }
         
       } catch (e) {
@@ -762,7 +786,7 @@ export default {
               name: userData.name,
               handle: userData.handle,
               emoji: userData.emoji,
-              balance: 0,
+              balance: 100, // Start with 100 TON for testing
               stats: { played: 0, won: 0, earned: 0 },
               createdAt: serverTimestamp(),
             });
@@ -771,11 +795,8 @@ export default {
           });
         } else {
           await updateDoc(userRef, { lastSeen: serverTimestamp() });
-          
           const existingData = userSnap.data();
-          if (existingData.emoji) {
-            this.user.emoji = existingData.emoji;
-          }
+          if (existingData.emoji) this.user.emoji = existingData.emoji;
         }
 
         this._unsubUser = onSnapshot(userRef, (snap) => {
@@ -814,7 +835,7 @@ export default {
         }
 
         const d = snap.data();
-        this.game = {
+        const newGame = {
           id: snap.id,
           players: d.players || [],
           totalBet: d.totalBet || 0,
@@ -822,33 +843,45 @@ export default {
           endsAt: d.endsAt?.toMillis?.() || null,
           spinStartTime: d.spinStartTime?.toMillis?.() || null,
           spinDuration: d.spinDuration || 6000,
-          winner: d.winner || null
+          winner: d.winner || null,
+          roundId: d.roundId || Date.now()
         };
 
         // Handle state changes
-        if (d.status === 'waiting' && prevStatus !== 'waiting') {
-          this.isSpinning = false;
-          this.winner = null;
-          this.startClientTimer();
-        }
-        else if (d.status === 'spinning' && prevStatus !== 'spinning') {
+        if (newGame.status === 'spinning' && prevStatus !== 'spinning') {
           this.isSpinning = true;
           this.stopTimer();
           
-          // Запускаем синхронизированную анимацию
-          this.startSyncedSpin(d.winner, d.spinStartTime, d.spinDuration);
-        }
-        else if (d.status === 'waiting_for_players' && prevStatus !== 'waiting_for_players') {
+          // Start spin animation
+          this.$nextTick(() => {
+            this.startSpinAnimation(newGame);
+          });
+        } 
+        else if (newGame.status === 'waiting' && prevStatus !== 'waiting') {
           this.isSpinning = false;
-          this.winner = null;
+          this.winnerOverlay = null;
+          this.startClientTimer();
+        }
+        else if (newGame.status === 'waiting_for_players' && prevStatus !== 'waiting_for_players') {
+          this.isSpinning = false;
+          this.winnerOverlay = null;
           this.spinAngle = 0;
           this.spinProgress = 0;
           this.timeLeft = ROUND_TIME;
           this.stopTimer();
         }
 
-        prevStatus = d.status;
-        this.drawWheel();
+        // Show winner if game is finished
+        if (newGame.winner && newGame.status !== 'spinning' && !this.winnerOverlay) {
+          this.showWinnerOverlay(newGame.winner);
+        }
+
+        this.game = newGame;
+        prevStatus = newGame.status;
+        
+        // Redraw wheel
+        this.$nextTick(() => this.drawWheel());
+        
       }, err => {
         console.error('Game snapshot error:', err);
         this.showToast('Connection error');
@@ -859,17 +892,16 @@ export default {
     startClientTimer() {
       this.stopTimer();
       this.timerHandle = setInterval(() => {
-        if (this.isSpinning || this.game.status !== 'waiting') return;
+        if (this.isSpinning || this.game.status !== 'waiting' || !this.game.endsAt) return;
 
-        this.timeLeft = this.game.endsAt 
-          ? Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000)) 
-          : 0;
+        const now = Date.now();
+        this.timeLeft = Math.max(0, Math.round((this.game.endsAt - now) / 1000));
 
-        if (this.timeLeft <= 0) {
+        if (this.timeLeft <= 0 && !this.isSpinning) {
           this.stopTimer();
           this.triggerRoundEnd();
         }
-      }, 500);
+      }, 200);
     },
 
     stopTimer() {
@@ -889,6 +921,7 @@ export default {
           winner: null,
           spinStartTime: null,
           spinDuration: 6000,
+          roundId: Date.now(),
           createdAt: serverTimestamp(),
         });
       } catch (e) { 
@@ -903,17 +936,35 @@ export default {
         await runTransaction(db, async (transaction) => {
           const gameRef = doc(db, 'config', 'currentGame');
           const gameDoc = await transaction.get(gameRef);
-
           if (!gameDoc.exists()) return;
 
           const gd = gameDoc.data();
           
           if (gd.status === 'waiting' && (force || Date.now() >= (gd.endsAt?.toMillis() || 0))) {
-            if (!gd.players || gd.players.length < 2) {
+            // If not enough players - refund bets
+            if (!gd.players || gd.players.length < MIN_PLAYERS) {
+              // Refund all players
+              for (const player of gd.players) {
+                const userRef = doc(db, 'users', player.userId);
+                transaction.update(userRef, {
+                  balance: increment(player.bet)
+                });
+              }
+              
+              // Reset game
               transaction.update(gameRef, {
-                endsAt: new Date(Date.now() + ROUND_TIME * 1000)
+                players: [],
+                totalBet: 0,
+                status: 'waiting_for_players',
+                endsAt: null,
+                winner: null,
+                spinStartTime: null,
+                roundId: Date.now()
               });
+              
+              this.showToast('Not enough players. Bets refunded.');
             } else {
+              // Select winner
               const winner = weightedRandom(gd.players);
               const prize = gd.totalBet * (1 - HOUSE_FEE);
               
@@ -935,39 +986,48 @@ export default {
       }
     },
 
-    // Синхронизированная анимация вращения
-    startSyncedSpin(winnerData, spinStartTime, spinDuration) {
-      if (!winnerData || !spinStartTime) return;
-      
-      this.isSpinning = true;
-      
-      // Рассчитываем прогресс на основе серверного времени
-      const now = Date.now();
-      const elapsed = now - spinStartTime;
-      const progress = Math.min(1, Math.max(0, elapsed / spinDuration));
-      
-      this.spinProgress = progress;
-      
-      // Если анимация уже завершена, показываем победителя
-      if (progress >= 1) {
-        this.spinProgress = 1;
-        this.resolveRound(winnerData);
+    startSpinAnimation(gameData) {
+      if (!gameData || !gameData.winner || !gameData.spinStartTime) {
+        console.log('Cannot start spin: missing data');
         return;
       }
       
-      // Иначе запускаем анимацию с правильным прогрессом
-      this.animateSyncedSpin(winnerData, spinStartTime, spinDuration);
+      if (!gameData.players || gameData.players.length === 0) {
+        console.log('Cannot start spin: no players');
+        return;
+      }
+      
+      this.stopAnimation();
+      this.isSpinning = true;
+      
+      const now = Date.now();
+      const elapsed = now - gameData.spinStartTime;
+      const progress = Math.min(1, Math.max(0, elapsed / gameData.spinDuration));
+      
+      this.spinProgress = progress;
+      
+      if (progress >= 1) {
+        this.spinProgress = 1;
+        this.showWinnerOverlay(gameData.winner);
+        return;
+      }
+      
+      this.calculateTargetAngle(gameData.winner, gameData.players, gameData.totalBet);
+      this.animateSpin(gameData.winner, gameData.spinStartTime, gameData.spinDuration);
     },
 
-    animateSyncedSpin(winnerData, spinStartTime, spinDuration) {
-      if (!this.game.players.length) return;
+    calculateTargetAngle(winnerData, players, totalBet) {
+      if (!players || players.length === 0 || totalBet === 0) {
+        this.targetAngle = 0;
+        return;
+      }
+      
+      let currentAngle = 0;
+      let winStart = 0;
+      let winEnd = 0;
 
-      // Находим угол победителя
-      const total = this.game.totalBet;
-      let currentAngle = 0, winStart = 0, winEnd = 0;
-
-      for (const p of this.game.players) {
-        const sweep = (p.bet / total) * Math.PI * 2;
+      for (const p of players) {
+        const sweep = (p.bet / totalBet) * 2 * Math.PI;
         if (p.userId === winnerData.userId) {
           winStart = currentAngle;
           winEnd = currentAngle + sweep;
@@ -976,12 +1036,19 @@ export default {
       }
 
       const winMidPoint = winStart + (winEnd - winStart) / 2;
-      const pointerOffset = -Math.PI / 2;
+      const pointerOffset = -Math.PI / 2; // Pointer at top
       const targetBase = pointerOffset - winMidPoint;
-      const randomSpins = 6 + (winnerData.userId.charCodeAt(0) % 3); // Детерминированные обороты
-      const targetAngle = targetBase + randomSpins * Math.PI * 2;
+      
+      // Deterministic number of spins based on userId
+      const hash = winnerData.userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+      const spins = 5 + (hash % 4);
+      
+      this.targetAngle = targetBase + spins * 2 * Math.PI;
+    },
 
+    animateSpin(winnerData, spinStartTime, spinDuration) {
       const startAng = this.spinAngle;
+      const targetAng = this.targetAngle;
       
       const animate = () => {
         const now = Date.now();
@@ -990,87 +1057,31 @@ export default {
         
         this.spinProgress = progress;
         
-        // Easing function
+        // Smooth easing
         const easeOut = 1 - Math.pow(1 - progress, 3);
-        this.spinAngle = startAng + (targetAngle - startAng) * easeOut;
+        this.spinAngle = startAng + (targetAng - startAng) * easeOut;
         
         this.drawWheel();
 
         if (progress < 1) {
           this.animFrame = requestAnimationFrame(animate);
         } else {
-          this.spinAngle = targetAngle;
+          this.spinAngle = targetAng;
           this.drawWheel();
-          this.resolveRound(winnerData);
+          this.showWinnerOverlay(winnerData);
         }
       };
       
       this.animFrame = requestAnimationFrame(animate);
     },
 
-    async resolveRound(winnerData) {
+    showWinnerOverlay(winnerData) {
       if (!winnerData) return;
       
-      const isWinnerMe = winnerData.userId === this.user.id;
-      const myBet = this.game.players.find(p => p.userId === this.user.id);
-
-      try {
-        const batch = writeBatch(db);
-
-        // Pay winner
-        batch.update(doc(db, 'users', winnerData.userId), {
-          balance: increment(winnerData.prize),
-          'stats.won': increment(1),
-          'stats.played': increment(1),
-          'stats.earned': increment(winnerData.prize),
-        });
-
-        // Update stats for losers
-        this.game.players.forEach(p => {
-          if (p.userId !== winnerData.userId) {
-            batch.update(doc(db, 'users', p.userId), { 
-              'stats.played': increment(1) 
-            });
-          }
-        });
-
-        // Update global stats
-        const statsRef = doc(db, 'config', 'stats');
-        batch.set(statsRef, {
-          totalGames: increment(1),
-          totalVolume: increment(this.game.totalBet),
-          houseBalance: increment(this.game.totalBet * HOUSE_FEE),
-        }, { merge: true });
-
-        // Reset game
-        const gameRef = doc(db, 'config', 'currentGame');
-        batch.update(gameRef, {
-          status: 'waiting_for_players',
-          players: [],
-          totalBet: 0,
-          winner: null,
-          spinStartTime: null,
-          endsAt: new Date(Date.now() + ROUND_TIME * 1000)
-        });
-
-        await batch.commit();
-
-        // Add to history
-        if (myBet) {
-          await addDoc(collection(db, 'users', this.user.id, 'history'), {
-            won: isWinnerMe,
-            amount: isWinnerMe ? winnerData.prize - myBet.bet : myBet.bet,
-            ts: serverTimestamp(),
-            gameId: this.game.id,
-          });
-          this.loadHistory();
-        }
-      } catch (e) { 
-        console.error('Error resolving round:', e); 
-      }
-
-      // Show winner overlay
-      this.winner = {
+      const isWinnerMe = winnerData.userId === this.user?.id;
+      const myBet = this.game.players?.find(p => p.userId === this.user?.id);
+      
+      this.winnerOverlay = {
         name: winnerData.name,
         prize: winnerData.prize,
         isMe: isWinnerMe,
@@ -1078,17 +1089,25 @@ export default {
       };
       
       this.isSpinning = false;
+      
+      // Auto-hide after 5 seconds
+      setTimeout(() => {
+        if (this.winnerOverlay) {
+          this.dismissWinner();
+        }
+      }, 5000);
     },
 
     dismissWinner() { 
-      this.winner = null; 
+      this.winnerOverlay = null; 
     },
 
     // ==================== BETTING ====================
     
     adjustBet(delta) {
-      const newAmount = +(this.betAmount + delta).toFixed(1);
-      this.betAmount = Math.max(0.1, Math.min(this.balance, newAmount));
+      let newAmount = this.betAmount + delta;
+      newAmount = Math.max(0.1, Math.min(this.balance, newAmount));
+      this.betAmount = Math.round(newAmount * 10) / 10;
     },
 
     async placeBet() {
@@ -1119,9 +1138,8 @@ export default {
             throw new Error('Already placed bet');
           }
 
-          transaction.update(userRef, { 
-            balance: increment(-this.betAmount) 
-          });
+          // Deduct bet
+          transaction.update(userRef, { balance: increment(-this.betAmount) });
 
           const newPlayer = {
             userId: this.user.id,
@@ -1138,6 +1156,7 @@ export default {
             totalBet: totalBet,
           };
 
+          // Start timer if first player
           if (gd.status === 'waiting_for_players') {
             updates.status = 'waiting';
             updates.endsAt = new Date(Date.now() + ROUND_TIME * 1000);
@@ -1147,6 +1166,7 @@ export default {
         });
 
         this.getTg()?.HapticFeedback?.notificationOccurred('success');
+        this.showToast(`✅ Bet placed: ${this.fmt(this.betAmount)} TON`);
 
       } catch (e) {
         this.betError = e.message;
@@ -1169,27 +1189,64 @@ export default {
       const r = w / 2 - 12;
       
       ctx.clearRect(0, 0, w, h);
+      ctx.shadowBlur = 0;
 
-      if (!this.game.players || !this.game.players.length) {
+      if (!this.game.players || this.game.players.length === 0) {
+        // Draw empty wheel
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = '#1a1a1f';
+        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+        
+        const gradient = ctx.createRadialGradient(cx-20, cy-20, 10, cx, cy, r);
+        gradient.addColorStop(0, '#2a2a2e');
+        gradient.addColorStop(1, '#1a1a1f');
+        ctx.fillStyle = gradient;
         ctx.fill();
-        ctx.strokeStyle = '#2a2a2e';
+        
+        ctx.strokeStyle = '#3a3a3e';
         ctx.lineWidth = 2;
         ctx.stroke();
         
-        ctx.fillStyle = '#6b6b6b';
-        ctx.font = '12px system-ui, sans-serif';
+        // Draw markers
+        ctx.strokeStyle = '#4a4a4e';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * 2 * Math.PI;
+          const x1 = cx + Math.cos(angle) * (r - 15);
+          const y1 = cy + Math.sin(angle) * (r - 15);
+          const x2 = cx + Math.cos(angle) * r;
+          const y2 = cy + Math.sin(angle) * r;
+          
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        }
+        
+        // Center
+        ctx.beginPath();
+        ctx.arc(cx, cy, 35, 0, 2 * Math.PI);
+        ctx.fillStyle = '#0d0d0f';
+        ctx.fill();
+        ctx.strokeStyle = '#f0b429';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Text
+        ctx.fillStyle = '#8a8a8e';
+        ctx.font = 'bold 16px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('no bets', cx, cy);
+        ctx.fillText(this.game.status === 'spinning' ? '🎡' : '🎰', cx, cy-10);
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.fillText(this.game.status === 'spinning' ? 'Spinning...' : 'No bets', cx, cy+15);
+        
         return;
       }
 
       const total = this.game.totalBet;
-      let startAngle = (this.spinAngle * Math.PI) / 180;
+      let startAngle = this.spinAngle;
 
+      // Draw segments
       this.game.players.forEach((player, i) => {
         const sliceAngle = (player.bet / total) * 2 * Math.PI;
         const endAngle = startAngle + sliceAngle;
@@ -1202,42 +1259,60 @@ export default {
         ctx.fillStyle = COLORS[i % COLORS.length];
         ctx.fill();
         
-        ctx.strokeStyle = '#0d0d0f';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#00000040';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
 
+        // Add emoji
         if (sliceAngle > 0.15) {
           ctx.save();
           ctx.translate(cx, cy);
           ctx.rotate(startAngle + sliceAngle / 2);
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.font = '12px system-ui, sans-serif';
+          ctx.font = 'bold 20px system-ui, sans-serif';
           ctx.fillStyle = '#ffffff';
-          ctx.shadowColor = '#00000080';
+          ctx.shadowColor = '#000000';
           ctx.shadowBlur = 4;
-          ctx.fillText(player.emoji, 50, 0);
+          ctx.fillText(player.emoji, 65, 0);
           ctx.restore();
         }
 
         startAngle = endAngle;
       });
 
+      // Draw center
       ctx.beginPath();
-      ctx.arc(cx, cy, 35, 0, Math.PI * 2);
-      ctx.fillStyle = '#0d0d0f';
+      ctx.arc(cx, cy, 35, 0, 2 * Math.PI);
+      
+      const centerGradient = ctx.createRadialGradient(cx-5, cy-5, 5, cx, cy, 35);
+      centerGradient.addColorStop(0, '#2a2a2e');
+      centerGradient.addColorStop(1, '#0d0d0f');
+      ctx.fillStyle = centerGradient;
       ctx.fill();
+      
       ctx.strokeStyle = '#f0b429';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
       ctx.stroke();
       
-      // Рисуем прогресс вращения если идет анимация
+      // Logo
+      ctx.shadowColor = '#f0b429';
+      ctx.shadowBlur = 10;
+      ctx.font = 'bold 24px system-ui, sans-serif';
+      ctx.fillStyle = '#f0b429';
+      ctx.fillText('◎', cx-14, cy+7);
+      ctx.shadowBlur = 0;
+      
+      // Progress indicator
       if (this.isSpinning && this.spinProgress > 0 && this.spinProgress < 1) {
         ctx.beginPath();
-        ctx.arc(cx, cy, 30, 0, this.spinProgress * Math.PI * 2);
+        ctx.arc(cx, cy, 30, -Math.PI/2, (this.spinProgress * 2 * Math.PI) - Math.PI/2);
         ctx.strokeStyle = '#f0b429';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
+        ctx.shadowColor = '#f0b429';
+        ctx.shadowBlur = 10;
         ctx.stroke();
+        ctx.shadowBlur = 0;
       }
     },
 
@@ -1247,7 +1322,7 @@ export default {
     },
 
     playerColor(userId) {
-      const index = this.game.players.findIndex(p => p.userId === userId);
+      const index = this.game.players?.findIndex(p => p.userId === userId) || 0;
       return COLORS[index % COLORS.length];
     },
 
@@ -1313,10 +1388,7 @@ export default {
         this.depositLoading = false;
         this.depositStatus = 'Waiting for blockchain confirmation...';
         
-        setTimeout(() => {
-          this.checkPendingDeposits();
-        }, 5000);
-        
+        setTimeout(() => this.checkPendingDeposits(), 5000);
         this.getTg()?.HapticFeedback?.notificationOccurred('success');
         
       } catch (e) { 
@@ -1338,9 +1410,7 @@ export default {
           if (!userSnap.exists()) throw new Error('User not found');
           
           const userData = userSnap.data();
-          if (userData.balance < this.withdrawAmt) {
-            throw new Error('Insufficient balance');
-          }
+          if (userData.balance < this.withdrawAmt) throw new Error('Insufficient balance');
           
           transaction.update(userRef, {
             balance: increment(-this.withdrawAmt),
@@ -1361,10 +1431,7 @@ export default {
         
         this.withdrawSuccess = true;
         this.showToast('Withdrawal request submitted!');
-        
-        setTimeout(() => {
-          this.closeModal();
-        }, 2000);
+        setTimeout(() => this.closeModal(), 2000);
         
       } catch (e) {
         this.showToast('Error: ' + e.message);
@@ -1405,9 +1472,7 @@ export default {
       
       try {
         const statsSnap = await getDoc(doc(db, 'config', 'stats'));
-        if (statsSnap.exists()) { 
-          Object.assign(this.adminData, statsSnap.data()); 
-        }
+        if (statsSnap.exists()) Object.assign(this.adminData, statsSnap.data());
         
         const uSnap = await getDocs(
           query(collection(db, 'users'), orderBy('balance', 'desc'), limit(50))
@@ -1417,9 +1482,7 @@ export default {
         
         const gamesSnap = await getDocs(collection(db, 'games'));
         let volume = 0;
-        gamesSnap.forEach(doc => {
-          volume += doc.data().totalBet || 0;
-        });
+        gamesSnap.forEach(doc => { volume += doc.data().totalBet || 0; });
         this.adminData.totalGames = gamesSnap.size;
         this.adminData.totalVolume = volume;
         
@@ -1435,11 +1498,7 @@ export default {
       }
 
       this._unsubAdmin.withdraws = onSnapshot(
-        query(
-          collection(db, 'withdraw_requests'), 
-          where('status', '==', 'pending'), 
-          orderBy('ts', 'desc')
-        ),
+        query(collection(db, 'withdraw_requests'), where('status', '==', 'pending'), orderBy('ts', 'desc')),
         (snap) => {
           this.adminData.withdraws = snap.docs.map(d => ({ 
             id: d.id, 
@@ -1451,11 +1510,7 @@ export default {
       );
       
       this._unsubAdmin.deposits = onSnapshot(
-        query(
-          collection(db, 'deposit_requests'), 
-          orderBy('ts', 'desc'), 
-          limit(20)
-        ),
+        query(collection(db, 'deposit_requests'), orderBy('ts', 'desc'), limit(20)),
         (snap) => {
           this.adminData.deposits = snap.docs.map(d => ({ 
             id: d.id, 
@@ -1470,17 +1525,12 @@ export default {
       r.processing = true;
       try {
         const batch = writeBatch(db);
-        
         batch.update(doc(db, 'withdraw_requests', r.id), { 
           status: 'approved', 
           approvedAt: serverTimestamp(),
           processedBy: this.user.id
         });
-        
-        batch.update(doc(db, 'users', r.userId), {
-          lockedBalance: increment(-r.amount)
-        });
-        
+        batch.update(doc(db, 'users', r.userId), { lockedBalance: increment(-r.amount) });
         await batch.commit();
         
         await addDoc(collection(db, 'users', r.userId, 'history'), {
@@ -1501,18 +1551,15 @@ export default {
       r.processing = true;
       try {
         const batch = writeBatch(db);
-        
         batch.update(doc(db, 'users', r.userId), {
           balance: increment(r.amount),
           lockedBalance: increment(-r.amount)
         });
-        
         batch.update(doc(db, 'withdraw_requests', r.id), { 
           status: 'rejected', 
           rejectedAt: serverTimestamp(),
           processedBy: this.user.id
         });
-        
         await batch.commit();
         this.showToast('Withdrawal rejected, funds returned');
       } catch (e) { 
@@ -1524,9 +1571,7 @@ export default {
     
     async adminAddBalance(u, amount) {
       try {
-        await updateDoc(doc(db, 'users', u.id), { 
-          balance: increment(amount) 
-        });
+        await updateDoc(doc(db, 'users', u.id), { balance: increment(amount) });
         this.showToast(`+${amount} TON → ${u.name}`);
       } catch (e) { 
         this.showToast('Error: ' + e.message); 
@@ -1559,9 +1604,7 @@ export default {
     showToast(msg) {
       this.toastMsg = msg;
       clearTimeout(this._toastTimer);
-      this._toastTimer = setTimeout(() => {
-        this.toastMsg = '';
-      }, 3000);
+      this._toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3000);
     },
     
     getTg() { 
