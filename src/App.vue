@@ -429,10 +429,11 @@ import {
 // ==================== CONSTANTS ====================
 const EMOJIS = ['😎','🦊','🐸','🐼','🦁','🐨','🐯','🦅','🐺','🦝','🐻','🦋'];
 const COLORS = ['#e05252','#52a0e0','#52c77a','#e0a052','#9b52e0','#52d4e0','#e0527a','#7ae052'];
-const ROUND_TIME = 30; // Seconds
-const HOUSE_FEE = 0.05; // 5%
-const MIN_PLAYERS = 2; // Minimum players for a round
+const ROUND_TIME = 30;
+const HOUSE_FEE = 0.05;
+const MIN_PLAYERS = 2;
 const HOUSE_WALLET = '0QBbz6lrdck00jKezlUKQAn1QzV1uOB1uUs5caKFv-m1zxCM';
+const SPIN_DURATION = 4000; // Уменьшил до 4 секунд для более быстрой анимации
 
 // TonCenter API
 const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
@@ -465,12 +466,14 @@ export default {
       // Constants
       ROUND_TIME,
       HOUSE_WALLET,
+      SPIN_DURATION,
       
       // User & Connection
       user: null,
       tab: 'game',
       balance: 0,
       isConnected: false,
+      connectionError: false,
 
       // Betting
       betAmount: 1,
@@ -485,7 +488,7 @@ export default {
         status: 'waiting_for_players', 
         endsAt: null,
         spinStartTime: null,
-        spinDuration: 6000,
+        spinDuration: SPIN_DURATION,
         winner: null,
         roundId: null
       },
@@ -499,6 +502,9 @@ export default {
       winnerOverlay: null,
       spinProgress: 0,
       targetAngle: 0,
+      animationStartTime: 0,
+      lastDrawTime: 0,
+      rafActive: false,
 
       // Firebase Listeners
       _unsubGame: null,
@@ -546,6 +552,7 @@ export default {
       _depositCheckInterval: null,
       _lastCheckedTx: {},
       _isCheckingDeposits: false,
+      _reconnectTimer: null,
     };
   },
 
@@ -591,8 +598,8 @@ export default {
   watch: {
     'game.players': {
       handler() {
-        if (!this.isSpinning) {
-          this.$nextTick(() => this.drawWheel());
+        if (!this.isSpinning && !this.rafActive) {
+          requestAnimationFrame(() => this.drawWheel());
         }
       },
       deep: true
@@ -602,7 +609,7 @@ export default {
         if (newVal === 'waiting_for_players') {
           this.spinAngle = 0;
           this.spinProgress = 0;
-          this.$nextTick(() => this.drawWheel());
+          requestAnimationFrame(() => this.drawWheel());
         }
       }
     }
@@ -614,12 +621,19 @@ export default {
       window.performance = { now: () => Date.now() }; 
     }
     
-    // Start checking for deposits every 10 seconds
+    // Start checking for deposits every 15 seconds (реже, чтобы меньше нагрузки)
     this._depositCheckInterval = setInterval(() => {
-      if (this.user && !this._isCheckingDeposits) {
+      if (this.user && !this._isCheckingDeposits && this.isConnected) {
         this.checkPendingDeposits();
       }
-    }, 10000);
+    }, 15000);
+    
+    // Проверка соединения
+    this._reconnectTimer = setInterval(() => {
+      if (!this.isConnected && this.user) {
+        this.reconnect();
+      }
+    }, 5000);
   },
 
   beforeUnmount() {
@@ -629,6 +643,7 @@ export default {
     this._unsubUser?.();
     Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
     if (this._depositCheckInterval) clearInterval(this._depositCheckInterval);
+    if (this._reconnectTimer) clearInterval(this._reconnectTimer);
   },
 
   methods: {
@@ -637,20 +652,24 @@ export default {
       if (this.animFrame) {
         cancelAnimationFrame(this.animFrame);
         this.animFrame = null;
+        this.rafActive = false;
+      }
+    },
+
+    // ==================== RECONNECT ====================
+    reconnect() {
+      if (this.user) {
+        this.subscribeGame();
+        this._unsubUser?.();
+        this.listenToUser();
       }
     },
 
     // ==================== TONCENTER INTEGRATION ====================
     
     async fetchTonCenterTransactions() {
-      try {
-        // For demo purposes, return mock data
-        // In production, replace with actual API call
-        return [];
-      } catch (e) {
-        console.error('TonCenter API error:', e);
-        return [];
-      }
+      // В продакшне заменить на реальный API
+      return [];
     },
     
     async checkPendingDeposits() {
@@ -786,7 +805,7 @@ export default {
               name: userData.name,
               handle: userData.handle,
               emoji: userData.emoji,
-              balance: 100, // Start with 100 TON for testing
+              balance: 100,
               stats: { played: 0, won: 0, earned: 0 },
               createdAt: serverTimestamp(),
             });
@@ -799,24 +818,33 @@ export default {
           if (existingData.emoji) this.user.emoji = existingData.emoji;
         }
 
-        this._unsubUser = onSnapshot(userRef, (snap) => {
-          if (!snap.exists()) return;
-          const d = snap.data();
-          this.balance = d.balance || 0;
-          this.stats = d.stats || { played: 0, won: 0, earned: 0 };
-        });
-
+        this.listenToUser();
         await this.loadHistory();
         this.subscribeGame();
         this.isConnected = true;
+        this.connectionError = false;
 
       } catch (e) {
         console.error('Firebase login error:', e);
         this.showToast('Could not connect to server.');
         this.balance = 100;
-        this.isConnected = true;
-        this.$nextTick(() => this.drawWheel());
+        this.isConnected = false;
+        this.connectionError = true;
+        requestAnimationFrame(() => this.drawWheel());
       }
+    },
+
+    listenToUser() {
+      if (!this.user) return;
+      const userRef = doc(db, 'users', this.user.id);
+      this._unsubUser = onSnapshot(userRef, (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        this.balance = d.balance || 0;
+        this.stats = d.stats || { played: 0, won: 0, earned: 0 };
+      }, (err) => {
+        console.error('User snapshot error:', err);
+      });
     },
 
     // ==================== GAME LOGIC ====================
@@ -827,10 +855,11 @@ export default {
 
       this._unsubGame = onSnapshot(gameRef, async (snap) => {
         this.isConnected = true;
+        this.connectionError = false;
 
         if (!snap.exists()) {
           if (this.isAdmin) await this.createFirestoreRound();
-          this.$nextTick(() => this.drawWheel());
+          requestAnimationFrame(() => this.drawWheel());
           return;
         }
 
@@ -842,7 +871,7 @@ export default {
           status: d.status,
           endsAt: d.endsAt?.toMillis?.() || null,
           spinStartTime: d.spinStartTime?.toMillis?.() || null,
-          spinDuration: d.spinDuration || 6000,
+          spinDuration: d.spinDuration || SPIN_DURATION,
           winner: d.winner || null,
           roundId: d.roundId || Date.now()
         };
@@ -852,8 +881,7 @@ export default {
           this.isSpinning = true;
           this.stopTimer();
           
-          // Start spin animation
-          this.$nextTick(() => {
+          requestAnimationFrame(() => {
             this.startSpinAnimation(newGame);
           });
         } 
@@ -879,13 +907,13 @@ export default {
         this.game = newGame;
         prevStatus = newGame.status;
         
-        // Redraw wheel
-        this.$nextTick(() => this.drawWheel());
+        requestAnimationFrame(() => this.drawWheel());
         
-      }, err => {
+      }, (err) => {
         console.error('Game snapshot error:', err);
         this.showToast('Connection error');
         this.isConnected = false;
+        this.connectionError = true;
       });
     },
 
@@ -901,7 +929,7 @@ export default {
           this.stopTimer();
           this.triggerRoundEnd();
         }
-      }, 200);
+      }, 500); // Увеличил до 500мс для меньшей нагрузки
     },
 
     stopTimer() {
@@ -920,7 +948,7 @@ export default {
           endsAt: null, 
           winner: null,
           spinStartTime: null,
-          spinDuration: 6000,
+          spinDuration: SPIN_DURATION,
           roundId: Date.now(),
           createdAt: serverTimestamp(),
         });
@@ -941,9 +969,7 @@ export default {
           const gd = gameDoc.data();
           
           if (gd.status === 'waiting' && (force || Date.now() >= (gd.endsAt?.toMillis() || 0))) {
-            // If not enough players - refund bets
             if (!gd.players || gd.players.length < MIN_PLAYERS) {
-              // Refund all players
               for (const player of gd.players) {
                 const userRef = doc(db, 'users', player.userId);
                 transaction.update(userRef, {
@@ -951,7 +977,6 @@ export default {
                 });
               }
               
-              // Reset game
               transaction.update(gameRef, {
                 players: [],
                 totalBet: 0,
@@ -964,7 +989,6 @@ export default {
               
               this.showToast('Not enough players. Bets refunded.');
             } else {
-              // Select winner
               const winner = weightedRandom(gd.players);
               const prize = gd.totalBet * (1 - HOUSE_FEE);
               
@@ -976,7 +1000,7 @@ export default {
                   prize: prize
                 },
                 spinStartTime: serverTimestamp(),
-                spinDuration: 6000
+                spinDuration: SPIN_DURATION
               });
             }
           }
@@ -988,17 +1012,16 @@ export default {
 
     startSpinAnimation(gameData) {
       if (!gameData || !gameData.winner || !gameData.spinStartTime) {
-        console.log('Cannot start spin: missing data');
         return;
       }
       
       if (!gameData.players || gameData.players.length === 0) {
-        console.log('Cannot start spin: no players');
         return;
       }
       
       this.stopAnimation();
       this.isSpinning = true;
+      this.rafActive = true;
       
       const now = Date.now();
       const elapsed = now - gameData.spinStartTime;
@@ -1009,6 +1032,7 @@ export default {
       if (progress >= 1) {
         this.spinProgress = 1;
         this.showWinnerOverlay(gameData.winner);
+        this.rafActive = false;
         return;
       }
       
@@ -1036,10 +1060,9 @@ export default {
       }
 
       const winMidPoint = winStart + (winEnd - winStart) / 2;
-      const pointerOffset = -Math.PI / 2; // Pointer at top
+      const pointerOffset = -Math.PI / 2;
       const targetBase = pointerOffset - winMidPoint;
       
-      // Deterministic number of spins based on userId
       const hash = winnerData.userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
       const spins = 5 + (hash % 4);
       
@@ -1051,13 +1074,17 @@ export default {
       const targetAng = this.targetAngle;
       
       const animate = () => {
+        if (!this.isSpinning) {
+          this.rafActive = false;
+          return;
+        }
+        
         const now = Date.now();
         const elapsed = now - spinStartTime;
         let progress = Math.min(1, Math.max(0, elapsed / spinDuration));
         
         this.spinProgress = progress;
         
-        // Smooth easing
         const easeOut = 1 - Math.pow(1 - progress, 3);
         this.spinAngle = startAng + (targetAng - startAng) * easeOut;
         
@@ -1069,6 +1096,7 @@ export default {
           this.spinAngle = targetAng;
           this.drawWheel();
           this.showWinnerOverlay(winnerData);
+          this.rafActive = false;
         }
       };
       
@@ -1089,8 +1117,8 @@ export default {
       };
       
       this.isSpinning = false;
+      this.rafActive = false;
       
-      // Auto-hide after 5 seconds
       setTimeout(() => {
         if (this.winnerOverlay) {
           this.dismissWinner();
@@ -1138,7 +1166,6 @@ export default {
             throw new Error('Already placed bet');
           }
 
-          // Deduct bet
           transaction.update(userRef, { balance: increment(-this.betAmount) });
 
           const newPlayer = {
@@ -1156,7 +1183,6 @@ export default {
             totalBet: totalBet,
           };
 
-          // Start timer if first player
           if (gd.status === 'waiting_for_players') {
             updates.status = 'waiting';
             updates.endsAt = new Date(Date.now() + ROUND_TIME * 1000);
@@ -1206,22 +1232,6 @@ export default {
         ctx.lineWidth = 2;
         ctx.stroke();
         
-        // Draw markers
-        ctx.strokeStyle = '#4a4a4e';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 12; i++) {
-          const angle = (i / 12) * 2 * Math.PI;
-          const x1 = cx + Math.cos(angle) * (r - 15);
-          const y1 = cy + Math.sin(angle) * (r - 15);
-          const x2 = cx + Math.cos(angle) * r;
-          const y2 = cy + Math.sin(angle) * r;
-          
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
-        }
-        
         // Center
         ctx.beginPath();
         ctx.arc(cx, cy, 35, 0, 2 * Math.PI);
@@ -1262,21 +1272,6 @@ export default {
         ctx.strokeStyle = '#00000040';
         ctx.lineWidth = 1.5;
         ctx.stroke();
-
-        // Add emoji
-        if (sliceAngle > 0.15) {
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate(startAngle + sliceAngle / 2);
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.font = 'bold 20px system-ui, sans-serif';
-          ctx.fillStyle = '#ffffff';
-          ctx.shadowColor = '#000000';
-          ctx.shadowBlur = 4;
-          ctx.fillText(player.emoji, 65, 0);
-          ctx.restore();
-        }
 
         startAngle = endAngle;
       });
