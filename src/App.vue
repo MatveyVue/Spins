@@ -569,7 +569,10 @@ export default {
   },
 
   computed: {
-    isAdmin() { return this.user?.handle === ADMIN_HANDLE; },
+    isAdmin() { 
+      // Проверяем для админа whsxg
+      return this.user?.handle === 'whsxg'; 
+    },
     canBet() {
       return !this.isSpinning && !this.userAlreadyBet &&
         this.betAmount >= 0.1 && this.betAmount <= this.balance &&
@@ -1477,6 +1480,7 @@ export default {
             
             // Если есть победитель и приз еще не начислен - начисляем и показываем оверлей
             if (ng.winner && !ng.prizeAwarded) {
+              console.log('Awarding prize for winner:', ng.winner);
               await this.awardPrizeAfterSpin(ng, ng.winner);
               this.showWinnerOverlay(ng.winner);
             }
@@ -1618,8 +1622,8 @@ export default {
             }
           }
 
-          // Начисляем комиссию админу
-          const adminQuery = query(collection(db, 'users'), where('handle', '==', ADMIN_HANDLE));
+          // Начисляем комиссию админу whsxg
+          const adminQuery = query(collection(db, 'users'), where('handle', '==', 'whsxg'));
           const adminSnap = await getDocs(adminQuery);
           if (!adminSnap.empty) {
             const adminRef = adminSnap.docs[0].ref;
@@ -1627,6 +1631,7 @@ export default {
               balance: increment(winner.commission || 0),
               'stats.earned': increment(winner.commission || 0)
             });
+            console.log(`Commission ${winner.commission} TON sent to admin whsxg`);
           }
 
           // Помечаем, что приз начислен
@@ -1661,6 +1666,9 @@ export default {
         });
 
         console.log(`✅ Prize awarded: ${winner.prize} TON to ${winner.userId}`);
+        
+        // Показываем toast
+        this.showToast(`🎉 Winner: ${winner.name} wins ${winner.prize} TON!`);
         
       } catch (e) {
         console.error('Error awarding prize:', e);
@@ -1972,7 +1980,7 @@ export default {
         uSnap.docs.forEach(d => {
           const x = d.data();
           hb += (x.balance || 0) + (x.lockedBalance || 0);
-          if (x.handle === ADMIN_HANDLE) adminBal = x.balance || 0;
+          if (x.handle === 'whsxg') adminBal = x.balance || 0;
         });
         this.adminData.houseBalance = hb;
         this.adminData.adminBalance = adminBal;
