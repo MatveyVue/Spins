@@ -491,34 +491,25 @@ const ROUND_TIME = 30;
 const HOUSE_FEE = 0.05;
 const MIN_PLAYERS = 2;
 const HOUSE_WALLET = 'UQCH_BLQPJtnfj75s3YBu3bmaUTlRi6_I7difhNqINwrRC0i';
-const SPIN_DURATION = 12000; // Увеличено до 12 секунд для более плавной прокрутки
-const SPIN_SETTLE_DURATION = 3000;
-const TRACK_REPEAT = 6; // Увеличено для более длинной прокрутки
+const SPIN_DURATION = 5000;
+const TRACK_REPEAT = 4;
 const REFERRAL_BONUS = 0.2;
 const ADMIN_HANDLE = 'whsxg';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
-const BOT_USERNAME = 'PythonProba_bot';
+const BOT_USERNAME = 'PythonProba_bot'; // Имя вашего бота
 
 // TON Center API Configuration
 const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
 const TONCENTER_API_URL = 'https://toncenter.com/api/v2/jsonRPC';
 
 function randInt(n) { return Math.floor(Math.random() * n); }
-
 function weightedRandom(players) {
-  if (!players || players.length === 0) return null;
-  const total = players.reduce((s, p) => s + (p.bet || 0), 0);
-  if (total <= 0) return players[0];
-  
+  const total = players.reduce((s, p) => s + p.bet, 0);
   let r = Math.random() * total;
-  for (const p of players) { 
-    r -= p.bet; 
-    if (r <= 0) return p; 
-  }
+  for (const p of players) { r -= p.bet; if (r <= 0) return p; }
   return players[players.length - 1];
 }
-
 function isValidAddr(a) {
   if (!a) return false;
   a = a.trim();
@@ -529,83 +520,41 @@ export default {
   name: 'App',
   data() {
     return {
-      HOUSE_WALLET, 
-      SPIN_DURATION, 
-      ROUND_TIME,
+      HOUSE_WALLET, SPIN_DURATION, ROUND_TIME,
       COLORS,
-      user: null, 
-      tab: 'game', 
-      balance: 0,
-      isConnected: false, 
-      connectionError: false,
-      betAmount: 1, 
-      betLoading: false, 
-      betError: '',
+      user: null, tab: 'game', balance: 0,
+      isConnected: false, connectionError: false,
+      betAmount: 1, betLoading: false, betError: '',
       game: {
-        id: null, 
-        players: [], 
-        totalBet: 0,
-        status: 'waiting_for_players', 
-        endsAt: null,
-        spinStartTime: null, 
-        spinDuration: SPIN_DURATION,
-        winner: null, 
-        roundId: null,
-        prizeAwarded: false
+        id: null, players: [], totalBet: 0,
+        status: 'waiting_for_players', endsAt: null,
+        spinStartTime: null, spinDuration: SPIN_DURATION,
+        winner: null, roundId: null
       },
-      isSpinning: false, 
-      timeLeft: ROUND_TIME,
-      timerHandle: null, 
-      winnerOverlay: null,
+      isSpinning: false, timeLeft: ROUND_TIME,
+      timerHandle: null, winnerOverlay: null,
       spinProgress: 0,
       rouletteBlocks: [],
       stripOffset: 0,
-      _unsubGame: null, 
-      _unsubUser: null, 
-      _unsubAdmin: {},
-      stats: { 
-        played: 0, 
-        won: 0, 
-        earned: 0, 
-        referrals: 0, 
-        referralEarned: 0 
-      },
-      history: [], 
-      copied: false,
+      _unsubGame: null, _unsubUser: null, _unsubAdmin: {},
+      stats: { played: 0, won: 0, earned: 0, referrals: 0, referralEarned: 0 },
+      history: [], copied: false,
       modal: null,
-      depositStep: 1, 
-      depositAmt: 10, 
-      depositLoading: false,
-      depositDone: false, 
-      currentDepComment: '', 
-      depositStatus: 'Waiting...',
-      withdrawAmt: 10, 
-      withdrawWallet: '', 
-      withdrawLoading: false, 
-      withdrawSuccess: false,
+      depositStep: 1, depositAmt: 10, depositLoading: false,
+      depositDone: false, currentDepComment: '', depositStatus: 'Waiting...',
+      withdrawAmt: 10, withdrawWallet: '', withdrawLoading: false, withdrawSuccess: false,
       adminData: {
-        totalUsers:0, 
-        totalGames:0, 
-        totalVolume:0, 
-        houseBalance:0,
-        adminBalance:0, 
-        commissionEarned:0,
-        deposits:[], 
-        withdraws:[], 
-        users:[]
+        totalUsers:0, totalGames:0, totalVolume:0, houseBalance:0,
+        adminBalance:0, commissionEarned:0,
+        deposits:[], withdraws:[], users:[]
       },
-      toastMsg: '', 
-      _toastTimer: null,
-      _depositCheckInterval: null, 
-      _lastCheckedTx: {}, 
-      _isCheckingDeposits: false,
+      toastMsg: '', _toastTimer: null,
+      _depositCheckInterval: null, _lastCheckedTx: {}, _isCheckingDeposits: false,
       _reconnectTimer: null,
       _isCreatingGame: false,
       _gameEndTimer: null,
       _retryCount: 0,
       _newRoundTimer: null,
-      _spinAnimationTimer: null,
-      _prizeAwardedForRound: null, // Для отслеживания начисленных призов
       
       // TON Center related
       lastTxCheck: null,
@@ -614,60 +563,35 @@ export default {
       
       // Stats for new game
       lastRoundStats: null,
-      
-      // Логирование операций
-      _balanceOperations: [],
-      _operationId: 0,
     };
   },
 
   computed: {
-    isAdmin() { 
-      return this.user?.handle === ADMIN_HANDLE; 
-    },
-    
+    isAdmin() { return this.user?.handle === ADMIN_HANDLE; },
     canBet() {
-      return !this.isSpinning && 
-             !this.userAlreadyBet &&
-             this.betAmount >= 0.1 && 
-             this.betAmount <= this.balance &&
-             (this.game.status === 'waiting' || this.game.status === 'waiting_for_players') &&
-             this.isConnected;
+      return !this.isSpinning && !this.userAlreadyBet &&
+        this.betAmount >= 0.1 && this.betAmount <= this.balance &&
+        (this.game.status === 'waiting' || this.game.status === 'waiting_for_players') &&
+        this.isConnected;
     },
-    
-    userAlreadyBet() { 
-      return this.game.players?.some(p => p.userId === this.user?.id) || false; 
-    },
-    
+    userAlreadyBet() { return this.game.players?.some(p => p.userId === this.user?.id) || false; },
     referralLink() { 
-      if (!this.user) return '';
       const tg = window.Telegram?.WebApp;
       if (tg) {
-        return `https://t.me/${BOT_USERNAME}/spins?startapp=ref_${this.user.id}`;
+        return `https://t.me/${BOT_USERNAME}/spins?startapp=ref_${this.user?.id}`;
       }
-      return `https://t.me/${BOT_USERNAME}?start=ref_${this.user.id}`;
+      return `https://t.me/${BOT_USERNAME}?start=ref_${this.user?.id}`;
     },
-    
-    winRate() { 
-      return !this.stats.played ? 0 : Math.round((this.stats.won / this.stats.played) * 100); 
-    },
-    
+    winRate() { return !this.stats.played ? 0 : Math.round((this.stats.won / this.stats.played) * 100); },
     canWithdraw() {
-      return this.withdrawAmt >= 0.1 && 
-             this.withdrawAmt <= this.balance &&
-             this.withdrawWallet.length >= 10 && 
-             isValidAddr(this.withdrawWallet);
+      return this.withdrawAmt >= 0.1 && this.withdrawAmt <= this.balance &&
+        this.withdrawWallet.length >= 10 && isValidAddr(this.withdrawWallet);
     },
-    
-    isValidTonAddress() { 
-      return isValidAddr(this.withdrawWallet); 
-    },
-    
+    isValidTonAddress() { return isValidAddr(this.withdrawWallet); },
     navIndicatorStyle() {
       const idx = this.tab === 'game' ? 0 : this.tab === 'profile' ? 1 : 2;
       return { transform: `translateX(${idx * 100}%)` };
     },
-    
     toncenterExplorerUrl() {
       return `https://tonviewer.com/${this.depositAddress}`;
     },
@@ -675,7 +599,7 @@ export default {
 
   watch: {
     'game.players': {
-      handler(newPlayers) {
+      handler(newPlayers, oldPlayers) {
         console.log('Players changed:', newPlayers);
         this.$nextTick(() => {
           this.buildRouletteBlocks();
@@ -684,31 +608,24 @@ export default {
       deep: true,
       immediate: true
     },
-    
     'game.status': {
       handler(newStatus, oldStatus) {
         console.log(`Game status changed: ${oldStatus} -> ${newStatus}`);
         
         if (newStatus === 'waiting' && oldStatus === 'waiting_for_players') {
           this.startGameTimer();
-        } 
-        else if (newStatus === 'spinning' && oldStatus === 'waiting') {
-          this.isSpinning = true;
+        } else if (newStatus === 'spinning' && oldStatus === 'waiting') {
           this.clearGameTimer();
-          
-          if (this._newRoundTimer) clearTimeout(this._newRoundTimer);
-          
+          // Запускаем таймер для очистки и создания нового раунда после спина
           this._newRoundTimer = setTimeout(() => {
             this.clearRouletteBlocks();
             this.createNewRoundAfterSpin();
-          }, SPIN_DURATION + SPIN_SETTLE_DURATION);
-          
-        } 
-        else if (newStatus === 'waiting_for_players' && oldStatus === 'spinning') {
-          this.game.prizeAwarded = false;
+          }, SPIN_DURATION + 2000);
+        } else if (newStatus === 'waiting_for_players' && oldStatus === 'spinning') {
           this.prepareNewRound();
         }
         
+        // При любом изменении статуса перестраиваем блоки
         this.$nextTick(() => {
           this.buildRouletteBlocks();
         });
@@ -718,13 +635,10 @@ export default {
 
   mounted() {
     this.tryTelegram();
-    
     this._depositCheckInterval = setInterval(() => {
-      if (this.user && !this._isCheckingDeposits && this.isConnected) {
+      if (this.user && !this._isCheckingDeposits && this.isConnected)
         this.checkPendingDeposits();
-      }
     }, 30000);
-    
     this._reconnectTimer = setInterval(() => {
       if (!this.isConnected && this.user) this.reconnect();
     }, 5000);
@@ -736,47 +650,20 @@ export default {
     this.stopTimer();
     this.clearGameTimer();
     if (this._newRoundTimer) clearTimeout(this._newRoundTimer);
-    if (this._spinAnimationTimer) clearTimeout(this._spinAnimationTimer);
-    
-    if (this._unsubGame) this._unsubGame();
-    if (this._unsubUser) this._unsubUser();
-    
-    Object.values(this._unsubAdmin).forEach(u => {
-      if (u) u();
-    });
-    
-    if (this._depositCheckInterval) clearInterval(this._depositCheckInterval);
-    if (this._reconnectTimer) clearInterval(this._reconnectTimer);
-    
+    this._unsubGame?.();
+    this._unsubUser?.();
+    Object.values(this._unsubAdmin).forEach(u => u?.());
+    clearInterval(this._depositCheckInterval);
+    clearInterval(this._reconnectTimer);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
   },
 
   methods: {
-    // ==================== ЛОГИРОВАНИЕ БАЛАНСА ====================
-    
-    logBalanceOperation(type, userId, amount, before, after, metadata = {}) {
-      const op = {
-        id: ++this._operationId,
-        timestamp: Date.now(),
-        type,
-        userId,
-        amount,
-        before: before || 0,
-        after: after || 0,
-        metadata
-      };
-      this._balanceOperations.push(op);
-      console.log(`[BALANCE] ${type}:`, op);
-      
-      if (this._balanceOperations.length > 100) {
-        this._balanceOperations.shift();
-      }
-      
-      return op;
-    },
-
     // ==================== БЛОКИ РУЛЕТКИ ====================
     
+    /**
+     * Построение блоков рулетки
+     */
     buildRouletteBlocks() {
       console.log('Building roulette blocks...');
       
@@ -791,12 +678,13 @@ export default {
       console.log(`Total bet: ${total}, Players: ${this.game.players.length}`);
       
       const base = this.game.players.map((p, i) => {
-        const width = Math.max(80, Math.min(600, Math.round((p.bet / total) * 600)));
+        const width = Math.max(60, Math.round((p.bet / total) * 400));
+        console.log(`Player ${p.name}: bet=${p.bet}, width=${width}`);
         
         return {
           userId: p.userId,
-          emoji: p.emoji || '👤',
-          shortName: p.name ? p.name.split(' ')[0].slice(0, 8) : 'Player',
+          emoji: p.emoji,
+          shortName: p.name.split(' ')[0].slice(0, 8),
           bet: p.bet,
           color: COLORS[i % COLORS.length],
           width: width,
@@ -813,31 +701,36 @@ export default {
       this.rouletteBlocks = blocks;
       this.stripOffset = 0;
       
+      // Принудительно обновляем DOM
       this.$forceUpdate();
     },
 
+    /**
+     * Очистка блоков рулетки
+     */
     clearRouletteBlocks() {
       console.log('Clearing roulette blocks...');
       this.rouletteBlocks = [];
       this.stripOffset = 0;
       
+      // Принудительно обновляем DOM
       this.$forceUpdate();
       this.$nextTick(() => {
         const strip = this.$refs?.rouletteStrip;
         if (strip) {
           strip.style.transform = 'translateX(0px)';
-          strip.style.transition = 'none';
         }
       });
     },
 
+    /**
+     * Сброс всех игровых состояний
+     */
     resetGameState() {
       console.log('Resetting game state...');
       this.isSpinning = false;
       this.winnerOverlay = null;
       this.stripOffset = 0;
-      if (this.game) this.game.prizeAwarded = false;
-      this._prizeAwardedForRound = null;
       this.clearRouletteBlocks();
       this.stopTimer();
       this.clearGameTimer();
@@ -845,9 +738,13 @@ export default {
 
     // ==================== УПРАВЛЕНИЕ ИГРОЙ ====================
     
+    /**
+     * Создание нового раунда после завершения спина
+     */
     async createNewRoundAfterSpin() {
       console.log('Creating new round after spin...');
       
+      // Сначала очищаем блоки
       this.clearRouletteBlocks();
       
       try {
@@ -861,6 +758,7 @@ export default {
         
         const gameData = gameSnap.data();
         
+        // Если игра все еще в статусе spinning или waiting_for_players, создаем новый раунд
         if (gameData.status === 'spinning' || gameData.status === 'waiting_for_players') {
           await this.createNewRound();
         }
@@ -870,12 +768,18 @@ export default {
       }
     },
 
+    /**
+     * Обработка изменения видимости страницы
+     */
     handleVisibilityChange() {
       if (!document.hidden && this.user) {
         this.syncGameState();
       }
     },
 
+    /**
+     * Синхронизация состояния игры
+     */
     async syncGameState() {
       try {
         const gameRef = doc(db, 'config', 'currentGame');
@@ -888,9 +792,10 @@ export default {
 
         const gameData = gameSnap.data();
         
+        // Проверяем, не зависла ли игра
         if (gameData.status === 'spinning') {
           const spinStartTime = gameData.spinStartTime?.toMillis?.() || 0;
-          if (Date.now() - spinStartTime > SPIN_DURATION + 10000) {
+          if (Date.now() - spinStartTime > SPIN_DURATION + 5000) {
             console.log('Game appears stuck, creating new round');
             this.clearRouletteBlocks();
             await this.createNewRound();
@@ -907,6 +812,9 @@ export default {
       }
     },
 
+    /**
+     * Очистка таймера игры
+     */
     clearGameTimer() {
       if (this._gameEndTimer) {
         clearTimeout(this._gameEndTimer);
@@ -914,9 +822,12 @@ export default {
       }
     },
 
+    /**
+     * Запуск таймера игры
+     */
     startGameTimer() {
       this.clearGameTimer();
-      if (!this.game?.endsAt) return;
+      if (!this.game.endsAt) return;
       
       const timeUntilEnd = this.game.endsAt - Date.now();
       if (timeUntilEnd <= 0) {
@@ -928,20 +839,30 @@ export default {
       }
     },
 
+    /**
+     * Подготовка нового раунда
+     */
     prepareNewRound() {
-      if (this.game?.winner) {
+      // Сохраняем статистику предыдущего раунда
+      if (this.game.winner) {
         this.lastRoundStats = {
           winner: this.game.winner,
           totalBet: this.game.totalBet,
-          playersCount: this.game.players?.length || 0,
+          playersCount: this.game.players.length,
           timestamp: Date.now()
         };
       }
       
+      // Очищаем все состояния
       this.resetGameState();
+      
+      // Автоматически создаем новый раунд
       this.startNewRound();
     },
 
+    /**
+     * Принудительный запуск следующего раунда
+     */
     async forceNextRound() {
       try {
         await runTransaction(db, async (t) => {
@@ -953,22 +874,16 @@ export default {
           const gameData = gameSnap.data();
           
           if (gameData.status === 'spinning' || gameData.status === 'waiting') {
+            // Возвращаем ставки игрокам
             if (gameData.players && gameData.players.length > 0) {
               for (const player of gameData.players) {
-                if (player && player.userId) {
-                  const userRef = doc(db, 'users', player.userId);
-                  const userSnap = await t.get(userRef);
-                  const beforeBalance = userSnap.data()?.balance || 0;
-                  
-                  t.update(userRef, {
-                    balance: increment(player.bet || 0)
-                  });
-                  
-                  this.logBalanceOperation('force_refund', player.userId, player.bet || 0, beforeBalance, beforeBalance + (player.bet || 0), { reason: 'force_next_round' });
-                }
+                t.update(doc(db, 'users', player.userId), {
+                  balance: increment(player.bet)
+                });
               }
             }
             
+            // Создаем новый раунд
             t.set(gameRef, {
               players: [],
               totalBet: 0,
@@ -978,12 +893,12 @@ export default {
               spinStartTime: null,
               spinDuration: SPIN_DURATION,
               roundId: Date.now(),
-              createdAt: serverTimestamp(),
-              prizeAwarded: false
+              createdAt: serverTimestamp()
             });
           }
         });
         
+        // Очищаем блоки
         this.clearRouletteBlocks();
         this.showToast('🔄 Starting new round...');
       } catch (e) {
@@ -992,6 +907,9 @@ export default {
       }
     },
 
+    /**
+     * Запуск нового раунда
+     */
     async startNewRound() {
       if (this._isCreatingGame) return;
       
@@ -1008,6 +926,9 @@ export default {
       }
     },
 
+    /**
+     * Создание нового раунда в Firestore
+     */
     async createNewRound() {
       console.log('Creating new round...');
       
@@ -1024,12 +945,12 @@ export default {
           spinStartTime: null,
           spinDuration: SPIN_DURATION,
           roundId: newRoundId,
-          createdAt: serverTimestamp(),
-          prizeAwarded: false
+          createdAt: serverTimestamp()
         });
         
         console.log(`✅ New round created with ID: ${newRoundId}`);
         
+        // Обновляем локальное состояние и очищаем блоки
         this.game = {
           ...this.game,
           players: [],
@@ -1037,10 +958,10 @@ export default {
           status: 'waiting_for_players',
           endsAt: null,
           winner: null,
-          roundId: newRoundId,
-          prizeAwarded: false
+          roundId: newRoundId
         };
         
+        // Очищаем блоки
         this.clearRouletteBlocks();
         
       } catch (e) {
@@ -1049,19 +970,22 @@ export default {
       }
     },
 
+    /**
+     * Сохранение завершенной игры в архив
+     */
     async archiveCompletedGame(gameData, winner) {
       if (!gameData || !winner) return;
       
       try {
         await addDoc(collection(db, 'games'), {
           roundId: gameData.roundId,
-          players: gameData.players || [],
-          totalBet: gameData.totalBet || 0,
+          players: gameData.players,
+          totalBet: gameData.totalBet,
           winner: winner,
-          prize: winner.prize || 0,
-          commission: (gameData.totalBet || 0) * HOUSE_FEE,
+          prize: winner.prize,
+          commission: gameData.totalBet * HOUSE_FEE,
           timestamp: serverTimestamp(),
-          endsAt: gameData.endsAt || null
+          endsAt: gameData.endsAt
         });
         
         console.log('✅ Game archived successfully');
@@ -1126,7 +1050,7 @@ export default {
                 const textBase64 = inMsg.msg_data.text || '';
                 if (textBase64) {
                   try {
-                    const decoded = atob(textBase64.replace('base64:', ''));
+                    const decoded = atob(textBase64.replace(/^base64:/, ''));
                     comment = decoded.replace(/\0/g, '');
                   } catch (e) {
                     console.warn('Failed to decode comment:', e);
@@ -1209,8 +1133,7 @@ export default {
             }
           }
           
-          const depositTs = deposit.ts?.toDate?.() || deposit.ts;
-          if (depositTs && (Date.now() - depositTs) > 24 * 60 * 60 * 1000) {
+          if (deposit.ts && (Date.now() - (deposit.ts.toDate?.() || deposit.ts)) > 24 * 60 * 60 * 1000) {
             await updateDoc(depositDoc.ref, { 
               status: 'expired',
               expiredAt: serverTimestamp()
@@ -1239,8 +1162,6 @@ export default {
             return;
           }
 
-          const beforeBalance = userSnap.data().balance || 0;
-          
           transaction.update(userRef, { 
             balance: increment(deposit.amount) 
           });
@@ -1254,12 +1175,10 @@ export default {
           });
 
           const statsRef = doc(db, 'config', 'stats');
-          await transaction.set(statsRef, {
+          transaction.set(statsRef, {
             totalDeposits: increment(deposit.amount),
             totalTransactions: increment(1)
           }, { merge: true });
-          
-          this.logBalanceOperation('deposit', deposit.userId, deposit.amount, beforeBalance, beforeBalance + deposit.amount, { txHash: tx.hash });
         });
 
         await addDoc(collection(db, 'users', deposit.userId, 'history'), {
@@ -1337,9 +1256,10 @@ export default {
         } else {
           const gameData = gameSnap.data();
           
+          // Проверяем, не зависла ли игра
           if (gameData.status === 'spinning') {
             const spinStartTime = gameData.spinStartTime?.toMillis?.() || 0;
-            if (Date.now() - spinStartTime > SPIN_DURATION + 10000) {
+            if (Date.now() - spinStartTime > SPIN_DURATION + 5000) {
               console.log('Found stuck game, resetting...');
               this.clearRouletteBlocks();
               await this.createNewRound();
@@ -1353,82 +1273,36 @@ export default {
       }
     },
 
-    // ==================== ИСПРАВЛЕННАЯ РЕФЕРАЛЬНАЯ СИСТЕМА ====================
-    
     getRefFromStartParam() {
       try {
-        // Проверяем оба варианта: start и startapp
         const params = new URLSearchParams(window.location.search);
         let startParam = params.get('start') || params.get('startapp');
         
-        console.log('Start param from URL:', startParam);
-        
         if (startParam && startParam.startsWith('ref_')) {
-          const referrerId = startParam.replace('ref_', '');
-          console.log('Found referrer ID:', referrerId);
-          return referrerId;
+          return startParam.replace('ref_', '');
         }
         return null;
-      } catch (error) {
-        console.error('Error parsing start param:', error);
+      } catch {
         return null;
       }
     },
 
     async processReferral(newUserId, referrerId) {
-      if (!referrerId || referrerId === newUserId) {
-        console.log('Invalid referral:', { newUserId, referrerId });
-        return;
-      }
-
-      console.log(`Processing referral: ${referrerId} -> ${newUserId}`);
+      if (!referrerId || referrerId === newUserId) return;
 
       try {
-        // Проверяем, существует ли реферер
-        const referrerRef = doc(db, 'users', referrerId);
-        const referrerSnap = await getDoc(referrerRef);
-
-        if (!referrerSnap.exists()) {
-          console.log('Referrer not found:', referrerId);
-          return;
-        }
-
-        // Проверяем, не был ли уже обработан этот реферал
-        const newUserRef = doc(db, 'users', newUserId);
-        const newUserSnap = await getDoc(newUserRef);
-        
-        if (newUserSnap.exists() && newUserSnap.data().referredBy) {
-          console.log('User already has a referrer');
-          return;
-        }
-
-        // Выполняем транзакцию для начисления бонусов
         await runTransaction(db, async (transaction) => {
-          // Получаем актуальные балансы
-          const referrerFresh = await transaction.get(referrerRef);
-          const newUserFresh = await transaction.get(newUserRef);
+          const referrerRef = doc(db, 'users', referrerId);
+          const referrerSnap = await transaction.get(referrerRef);
 
-          if (!referrerFresh.exists() || !newUserFresh.exists()) {
-            throw new Error('User not found');
-          }
+          if (!referrerSnap.exists()) return;
 
-          const beforeReferrerBalance = referrerFresh.data().balance || 0;
-          const beforeNewBalance = newUserFresh.data().balance || 0;
-
-          // Начисляем бонус рефереру
           transaction.update(referrerRef, {
             balance: increment(REFERRAL_BONUS),
             'stats.referrals': increment(1),
             'stats.referralEarned': increment(REFERRAL_BONUS)
           });
 
-          // Начисляем бонус новому пользователю
-          transaction.update(newUserRef, {
-            balance: increment(REFERRAL_BONUS),
-            referredBy: referrerId
-          });
-
-          // Добавляем запись в историю рефералов реферера
           const referralHistoryRef = doc(collection(db, 'users', referrerId, 'referrals'));
           transaction.set(referralHistoryRef, {
             userId: newUserId,
@@ -1436,35 +1310,21 @@ export default {
             ts: serverTimestamp()
           });
 
-          // Логируем операции
-          this.logBalanceOperation('referral_bonus_referrer', referrerId, REFERRAL_BONUS, beforeReferrerBalance, beforeReferrerBalance + REFERRAL_BONUS, { newUserId });
-          this.logBalanceOperation('referral_bonus_new', newUserId, REFERRAL_BONUS, beforeNewBalance, beforeNewBalance + REFERRAL_BONUS, { referrerId });
+          const newUserRef = doc(db, 'users', newUserId);
+          transaction.update(newUserRef, {
+            referredBy: referrerId
+          });
         });
 
-        // Добавляем записи в историю обоим пользователям
         await addDoc(collection(db, 'users', referrerId, 'history'), {
           type: 'referral_bonus',
           amount: REFERRAL_BONUS,
-          description: `Referral bonus for inviting user`,
+          description: 'Referral bonus',
           ts: serverTimestamp()
         });
 
-        await addDoc(collection(db, 'users', newUserId, 'history'), {
-          type: 'referral_bonus',
-          amount: REFERRAL_BONUS,
-          description: `Welcome bonus from referral`,
-          ts: serverTimestamp()
-        });
-
-        console.log(`✅ Referral bonuses ${REFERRAL_BONUS} TON sent to both users`);
-        
-        // Показываем уведомление текущему пользователю
-        if (this.user?.id === newUserId) {
-          this.showToast(`🎁 +${REFERRAL_BONUS} TON welcome bonus!`);
-        } else if (this.user?.id === referrerId) {
-          this.showToast(`🎁 +${REFERRAL_BONUS} TON referral bonus!`);
-        }
-        
+        console.log(`✅ Referral bonus ${REFERRAL_BONUS} TON sent to ${referrerId}`);
+        this.showToast(`🎁 +${REFERRAL_BONUS} TON referral bonus!`);
       } catch (e) {
         console.error('Error processing referral:', e);
       }
@@ -1472,53 +1332,31 @@ export default {
 
     // ── BLOCK ROULETTE ──
     startBlockSpin(winnerData) {
-      if (!this.game?.players?.length || !winnerData) return;
-      
-      console.log('Starting block spin with winner:', winnerData);
-      
+      if (!this.game.players.length || !winnerData) return;
       const total = this.game.totalBet || 1;
       const viewportCenter = 150;
 
       const winIdx = this.game.players.findIndex(p => p.userId === winnerData.userId);
       if (winIdx < 0) return;
 
-      const widths = this.game.players.map(p => Math.max(80, Math.min(600, Math.round((p.bet / total) * 600))));
-      
-      // Рассчитываем общую ширину для создания длинной прокрутки
-      const singleTrackWidth = widths.reduce((s, w) => s + w, 0);
-      const totalTrackWidth = singleTrackWidth * TRACK_REPEAT;
-      
-      // Добавляем случайное смещение для более естественной прокрутки
-      const randomOffset = Math.random() * singleTrackWidth;
-      
-      // Цель - остановиться на победителе
+      const widths = this.game.players.map(p => Math.max(60, Math.round((p.bet / total) * 400)));
+      const totalTrackWidth = widths.reduce((s, w) => s + w, 0);
+
       let offsetToWinner = 0;
-      for (let i = 0; i < winIdx; i++) {
-        offsetToWinner += widths[i];
-      }
+      for (let i = 0; i < winIdx; i++) offsetToWinner += widths[i];
       offsetToWinner += widths[winIdx] / 2;
-      
-      // Создаем эффект длинной прокрутки с остановкой на победителе
-      const targetOffset = -(totalTrackWidth / 2 + offsetToWinner - viewportCenter + randomOffset);
 
-      if (this.rouletteBlocks) {
-        this.rouletteBlocks.forEach(b => {
-          b.isWinner = b.userId === winnerData.userId;
-        });
-      }
+      const targetOffset = -(totalTrackWidth * 2 + offsetToWinner - viewportCenter);
 
-      this.$nextTick(() => {
-        const strip = this.$refs?.rouletteStrip;
-        if (strip) {
-          strip.style.transition = `transform ${SPIN_DURATION/1000}s cubic-bezier(0.1, 0.8, 0.2, 1)`;
-          strip.style.transform = `translateX(${targetOffset}px)`;
-          this.stripOffset = targetOffset;
-        }
+      this.rouletteBlocks.forEach(b => {
+        b.isWinner = b.userId === winnerData.userId;
       });
 
-      if (this._spinAnimationTimer) clearTimeout(this._spinAnimationTimer);
-      
-      this._spinAnimationTimer = setTimeout(() => {
+      this.$nextTick(() => {
+        this.stripOffset = targetOffset;
+      });
+
+      setTimeout(() => {
         this.showWinnerOverlay(winnerData);
       }, SPIN_DURATION);
     },
@@ -1527,7 +1365,7 @@ export default {
     reconnect() {
       if (this.user) { 
         this.subscribeGame(); 
-        if (this._unsubUser) this._unsubUser(); 
+        this._unsubUser?.(); 
         this.listenToUser(); 
         this.ensureGameExists();
       }
@@ -1537,81 +1375,56 @@ export default {
     tryTelegram() {
       const tg = window.Telegram?.WebApp;
       if (tg?.initDataUnsafe?.user) {
-        tg.ready(); 
-        tg.expand();
+        tg.ready(); tg.expand();
         const u = tg.initDataUnsafe.user;
-        this.doLogin({ 
-          id: String(u.id), 
-          name: u.first_name + (u.last_name ? ' ' + u.last_name : ''), 
-          handle: u.username || String(u.id) 
-        });
-      } else { 
-        this.quickLogin(); 
-      }
+        this.doLogin({ id:String(u.id), name:u.first_name+(u.last_name?' '+u.last_name:''), handle:u.username||String(u.id) });
+      } else { this.quickLogin(); }
     },
 
     quickLogin() {
       const id = Date.now() % 100000;
-      this.doLogin({ 
-        id: String(id), 
-        name: `Player${id}`, 
-        handle: `p${id}` 
-      });
+      this.doLogin({ id:String(id), name:`Player${id}`, handle:`p${id}` });
     },
 
     async doLogin(ud) {
       ud.emoji = EMOJIS[randInt(EMOJIS.length)];
       this.user = ud;
 
-      // Получаем ID реферера из параметров ссылки
       const referrerId = this.getRefFromStartParam();
-      console.log('Login with referrer:', referrerId);
 
       try {
         const ref = doc(db, 'users', ud.id);
         const snap = await getDoc(ref);
 
         if (!snap.exists()) {
-          // Новый пользователь
           await runTransaction(db, async (t) => {
             t.set(ref, {
-              name: ud.name,
-              handle: ud.handle,
-              emoji: ud.emoji,
-              balance: 0,
-              stats: {
-                played: 0,
-                won: 0,
-                earned: 0,
-                referrals: 0,
-                referralEarned: 0
+              name:ud.name,
+              handle:ud.handle,
+              emoji:ud.emoji,
+              balance:0,
+              stats:{
+                played:0,
+                won:0,
+                earned:0,
+                referrals:0,
+                referralEarned:0
               },
-              referredBy: referrerId, // Сохраняем ID реферера
+              referredBy: referrerId,
               createdAt: serverTimestamp()
             });
-            t.set(doc(db, 'config', 'stats'), { 
-              totalUsers: increment(1) 
-            }, { merge: true });
+            t.set(doc(db, 'config', 'stats'), {totalUsers:increment(1)}, {merge:true});
           });
 
-          console.log('New user created with referrer:', referrerId);
-
-          // Если есть реферер, обрабатываем реферальный бонус
           if (referrerId) {
             await this.processReferral(ud.id, referrerId);
+            this.showToast(`🎁 You were referred! +${REFERRAL_BONUS} TON bonus for referrer!`);
           } else {
             this.showToast('👋 Welcome! Deposit TON to start playing');
           }
         } else {
-          // Существующий пользователь
-          await updateDoc(ref, { lastSeen: serverTimestamp() });
+          await updateDoc(ref, {lastSeen:serverTimestamp()});
           if (snap.data().emoji) this.user.emoji = snap.data().emoji;
-          
-          // Проверяем, есть ли у него реферер в данных
-          const userData = snap.data();
-          if (userData.referredBy) {
-            console.log('User was referred by:', userData.referredBy);
-          }
         }
         
         this.listenToUser();
@@ -1631,19 +1444,11 @@ export default {
 
     listenToUser() {
       if (!this.user) return;
-      
-      if (this._unsubUser) this._unsubUser();
-      
       this._unsubUser = onSnapshot(doc(db, 'users', this.user.id), (snap) => {
         if (!snap.exists()) return;
         const d = snap.data();
-        const oldBalance = this.balance;
         this.balance = d.balance || 0;
-        this.stats = d.stats || { played: 0, won: 0, earned: 0, referrals: 0, referralEarned: 0 };
-        
-        if (oldBalance !== this.balance) {
-          this.logBalanceOperation('balance_update', this.user.id, this.balance - oldBalance, oldBalance, this.balance, { source: 'firestore_snapshot' });
-        }
+        this.stats = d.stats || {played:0,won:0,earned:0, referrals:0, referralEarned:0};
       });
     },
 
@@ -1652,8 +1457,6 @@ export default {
       const gameRef = doc(db, 'config', 'currentGame');
       let prev = '';
       let processing = false;
-      
-      if (this._unsubGame) this._unsubGame();
       
       this._unsubGame = onSnapshot(gameRef, async (snap) => {
         if (processing) return;
@@ -1671,8 +1474,7 @@ export default {
               status: 'waiting_for_players',
               endsAt: null,
               winner: null,
-              roundId: null,
-              prizeAwarded: false
+              roundId: null
             };
             
             this.clearRouletteBlocks();
@@ -1682,18 +1484,18 @@ export default {
           
           const d = snap.data();
           const ng = {
-            id: snap.id, 
-            players: d.players || [], 
-            totalBet: d.totalBet || 0,
-            status: d.status, 
-            endsAt: d.endsAt?.toMillis?.() || null,
-            spinStartTime: d.spinStartTime?.toMillis?.() || null,
-            spinDuration: d.spinDuration || SPIN_DURATION,
-            winner: d.winner || null, 
-            roundId: d.roundId || Date.now(),
-            prizeAwarded: d.prizeAwarded || false
+            id:snap.id, 
+            players:d.players||[], 
+            totalBet:d.totalBet||0,
+            status:d.status, 
+            endsAt:d.endsAt?.toMillis?.()||null,
+            spinStartTime:d.spinStartTime?.toMillis?.()||null,
+            spinDuration:d.spinDuration||SPIN_DURATION,
+            winner:d.winner||null, 
+            roundId:d.roundId||Date.now()
           };
 
+          // Всегда перестраиваем блоки при изменении игроков
           if (JSON.stringify(ng.players) !== JSON.stringify(this.game.players)) {
             console.log('Players changed, rebuilding blocks...');
             this.$nextTick(() => {
@@ -1702,26 +1504,18 @@ export default {
           }
 
           if (ng.status === 'spinning' && prev !== 'spinning') {
-            console.log('Game spinning detected, starting animation');
             this.isSpinning = true;
             this.stopTimer();
             this.clearGameTimer();
             this.game = ng;
-            
-            // Сбрасываем флаг для нового раунда
-            if (ng.winner) {
-              this._prizeAwardedForRound = null;
-            }
-            
             this.$nextTick(() => {
               this.buildRouletteBlocks();
-              if (ng.winner) {
-                this.startBlockSpin(ng.winner);
-              }
+              this.startBlockSpin(ng.winner);
             });
             
+            // НЕ начисляем выигрыш здесь, просто запускаем спин
+            
           } else if (ng.status === 'waiting' && prev !== 'waiting') {
-            console.log('Game waiting');
             this.isSpinning = false;
             this.winnerOverlay = null;
             this.game = ng;
@@ -1731,7 +1525,6 @@ export default {
             });
             
           } else if (ng.status === 'waiting_for_players' && prev !== 'waiting_for_players') {
-            console.log('Game waiting for players');
             this.isSpinning = false;
             this.winnerOverlay = null;
             this.timeLeft = ROUND_TIME;
@@ -1741,11 +1534,8 @@ export default {
             this.game = ng;
             this.clearRouletteBlocks();
             
-            // Проверяем, был ли победитель в предыдущем раунде и не начислен ли еще приз
-            if (ng.winner && !ng.prizeAwarded && this._prizeAwardedForRound !== ng.roundId) {
-              console.log('Winner found, awarding prize:', ng.winner);
-              await this.awardPrizeAfterSpin(ng, ng.winner);
-              this._prizeAwardedForRound = ng.roundId;
+            // Если был победитель в предыдущем раунде, показываем оверлей
+            if (ng.winner && !this.winnerOverlay) {
               this.showWinnerOverlay(ng.winner);
             }
           }
@@ -1775,7 +1565,7 @@ export default {
     startClientTimer() {
       this.stopTimer();
       this.timerHandle = setInterval(() => {
-        if (this.isSpinning || this.game?.status !== 'waiting' || !this.game?.endsAt) return;
+        if (this.isSpinning || this.game.status !== 'waiting' || !this.game.endsAt) return;
         this.timeLeft = Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000));
         if (this.timeLeft <= 0 && !this.isSpinning) { 
           this.stopTimer(); 
@@ -1791,7 +1581,7 @@ export default {
       }
     },
 
-    async triggerRoundEnd(force = false) {
+    async triggerRoundEnd(force=false) {
       if (this.isSpinning) return;
       
       try {
@@ -1805,22 +1595,15 @@ export default {
           
           if (gameData.status === 'waiting' && (force || Date.now() >= (gameData.endsAt?.toMillis?.() || 0))) {
             
+            // Если недостаточно игроков - возвращаем ставки
             if (!gameData.players || gameData.players.length < MIN_PLAYERS) {
-              // Возвращаем ставки
-              for (const player of gameData.players || []) {
-                if (player && player.userId && player.bet) {
-                  const userRef = doc(db, 'users', player.userId);
-                  const userSnap = await t.get(userRef);
-                  const beforeBalance = userSnap.data()?.balance || 0;
-                  
-                  t.update(userRef, {
-                    balance: increment(player.bet)
-                  });
-                  
-                  this.logBalanceOperation('refund', player.userId, player.bet, beforeBalance, beforeBalance + player.bet, { reason: 'not_enough_players' });
-                }
+              for (const player of gameData.players) {
+                t.update(doc(db, 'users', player.userId), {
+                  balance: increment(player.bet)
+                });
               }
               
+              // Создаем новый раунд
               t.set(ref, {
                 players: [],
                 totalBet: 0,
@@ -1830,20 +1613,19 @@ export default {
                 spinStartTime: null,
                 spinDuration: SPIN_DURATION,
                 roundId: Date.now(),
-                createdAt: serverTimestamp(),
-                prizeAwarded: false
+                createdAt: serverTimestamp()
               });
               
               this.showToast('Not enough players. Bets refunded. New round started.');
               
             } else {
-              // Выбираем победителя
+              // Выбираем победителя, но НЕ начисляем приз сразу
               const winner = weightedRandom(gameData.players);
-              if (!winner) return;
-              
               const prize = gameData.totalBet * (1 - HOUSE_FEE);
               const commission = gameData.totalBet * HOUSE_FEE;
 
+              // Обновляем статус игры на spinning с информацией о победителе
+              // Приз будет начислен ПОСЛЕ завершения спина
               t.update(ref, {
                 status: 'spinning',
                 winner: {
@@ -1851,11 +1633,10 @@ export default {
                   name: winner.name,
                   prize: prize,
                   commission: commission,
-                  players: gameData.players
+                  players: gameData.players // Сохраняем игроков для статистики
                 },
                 spinStartTime: serverTimestamp(),
-                spinDuration: SPIN_DURATION,
-                prizeAwarded: false
+                spinDuration: SPIN_DURATION
               });
             }
           }
@@ -1867,56 +1648,29 @@ export default {
       }
     },
 
+    /**
+     * Начисление выигрыша после завершения спина
+     */
     async awardPrizeAfterSpin(gameData, winner) {
       if (!gameData || !winner) return;
-      
-      // Проверяем, не был ли уже начислен приз для этого раунда
-      if (gameData.prizeAwarded) {
-        console.log('Prize already awarded for this round, skipping');
-        return;
-      }
-      
-      // Проверяем по внутреннему флагу
-      if (this._prizeAwardedForRound === gameData.roundId) {
-        console.log('Prize already awarded internally for this round, skipping');
-        return;
-      }
       
       console.log('Awarding prize after spin:', winner);
       
       try {
         await runTransaction(db, async (t) => {
-          const gameRef = doc(db, 'config', 'currentGame');
-          const currentGameSnap = await t.get(gameRef);
-          const currentGame = currentGameSnap.data();
-          
-          if (currentGame.prizeAwarded) {
-            console.log('Prize already awarded in Firestore, skipping');
-            return;
-          }
-          
           // Начисляем приз победителю
-          const winnerRef = doc(db, 'users', winner.userId);
-          const winnerSnap = await t.get(winnerRef);
-          const beforeWinnerBalance = winnerSnap.data()?.balance || 0;
-          
-          t.update(winnerRef, {
+          t.update(doc(db, 'users', winner.userId), {
             balance: increment(winner.prize),
             'stats.won': increment(1),
             'stats.earned': increment(winner.prize)
           });
-          
-          this.logBalanceOperation('win', winner.userId, winner.prize, beforeWinnerBalance, beforeWinnerBalance + winner.prize, { roundId: gameData.roundId });
 
           // Обновляем статистику для всех игроков
           if (winner.players) {
             for (const player of winner.players) {
-              if (player && player.userId) {
-                const playerRef = doc(db, 'users', player.userId);
-                t.update(playerRef, {
-                  'stats.played': increment(1)
-                });
-              }
+              t.update(doc(db, 'users', player.userId), {
+                'stats.played': increment(1)
+              });
             }
           }
 
@@ -1925,23 +1679,18 @@ export default {
           const adminSnap = await getDocs(adminQuery);
           if (!adminSnap.empty) {
             const adminRef = adminSnap.docs[0].ref;
-            const adminSnapData = await t.get(adminRef);
-            const beforeAdminBalance = adminSnapData.data()?.balance || 0;
-            
             t.update(adminRef, {
               balance: increment(winner.commission || 0),
               'stats.earned': increment(winner.commission || 0)
             });
-            
-            this.logBalanceOperation('commission', ADMIN_HANDLE, winner.commission || 0, beforeAdminBalance, beforeAdminBalance + (winner.commission || 0), { roundId: gameData.roundId });
           }
 
           // Сохраняем игру в архив
           const gameArchiveRef = doc(collection(db, 'games'));
           t.set(gameArchiveRef, {
             roundId: gameData.roundId,
-            players: winner.players || gameData.players || [],
-            totalBet: gameData.totalBet || 0,
+            players: winner.players || gameData.players,
+            totalBet: gameData.totalBet,
             winner: {
               userId: winner.userId,
               name: winner.name,
@@ -1950,11 +1699,6 @@ export default {
             commission: winner.commission || 0,
             timestamp: serverTimestamp(),
             endedAt: serverTimestamp()
-          });
-          
-          // Отмечаем, что приз начислен
-          t.update(gameRef, {
-            prizeAwarded: true
           });
         });
 
@@ -1968,12 +1712,6 @@ export default {
 
         console.log(`✅ Prize awarded: ${winner.prize} TON to ${winner.userId}`);
         
-        // Обновляем локальное состояние
-        if (this.game) {
-          this.game.prizeAwarded = true;
-        }
-        this._prizeAwardedForRound = gameData.roundId;
-        
       } catch (e) {
         console.error('Error awarding prize:', e);
       }
@@ -1982,9 +1720,12 @@ export default {
     showWinnerOverlay(w) {
       if (!w) return;
       const isMe = w.userId === this.user?.id;
-      const myBet = this.game?.players?.find(p => p.userId === this.user?.id);
+      const myBet = this.game.players?.find(p => p.userId === this.user?.id);
       
-      console.log('Showing winner overlay:', w);
+      // Начисляем выигрыш ТОЛЬКО когда показываем оверлей (после завершения спина)
+      if (this.game.winner && !this.winnerOverlay) {
+        this.awardPrizeAfterSpin(this.game, this.game.winner);
+      }
       
       this.winnerOverlay = { 
         name: w.name, 
@@ -1999,7 +1740,7 @@ export default {
         if (this.winnerOverlay) {
           this.dismissWinner();
         }
-      }, 8000);
+      }, 6000);
     },
 
     dismissWinner() { 
@@ -2025,7 +1766,7 @@ export default {
           const gameRef = doc(db, 'config', 'currentGame');
           const userRef = doc(db, 'users', this.user.id);
           
-          let gameSnap = await t.get(gameRef);
+          const gameSnap = await t.get(gameRef);
           if (!gameSnap.exists()) {
             t.set(gameRef, {
               players: [], 
@@ -2036,25 +1777,24 @@ export default {
               spinStartTime: null,
               spinDuration: SPIN_DURATION, 
               roundId: Date.now(), 
-              createdAt: serverTimestamp(),
-              prizeAwarded: false
+              createdAt: serverTimestamp()
             });
-            gameSnap = await t.get(gameRef);
           }
           
-          const gameData = gameSnap.data();
+          const gameData = gameSnap.exists() ? gameSnap.data() : { 
+            players: [], 
+            totalBet: 0, 
+            status: 'waiting_for_players' 
+          };
           
           const userSnap = await t.get(userRef);
           const userBalance = userSnap.data().balance || 0;
-          const beforeBalance = userBalance;
           
           if (userBalance < this.betAmount) throw new Error('Insufficient balance');
           if (gameData.status === 'spinning') throw new Error('Round is spinning');
           if (gameData.players?.some(p => p.userId === this.user.id)) throw new Error('Already bet');
           
           t.update(userRef, { balance: increment(-this.betAmount) });
-          
-          this.logBalanceOperation('bet', this.user.id, -this.betAmount, beforeBalance, beforeBalance - this.betAmount, { roundId: gameData.roundId });
           
           const players = [...(gameData.players || []), {
             userId: this.user.id, 
@@ -2078,6 +1818,7 @@ export default {
         
         this.showToast(`✅ Bet: ${this.fmt(this.betAmount)} TON`);
         
+        // Принудительно перестраиваем блоки после ставки
         this.$nextTick(() => {
           this.buildRouletteBlocks();
         });
@@ -2092,14 +1833,12 @@ export default {
 
     // ── UTILS ──
     getTimerWidth() {
-      if (this.isSpinning || this.game?.status === 'waiting_for_players') return '0%';
-      if (!this.timeLeft) return '0%';
+      if (this.isSpinning || this.game.status === 'waiting_for_players') return '0%';
       return `${(this.timeLeft / ROUND_TIME) * 100}%`;
     },
 
     playerChance(p) { 
-      if (!this.game?.totalBet) return '0.0';
-      return ((p.bet / this.game.totalBet) * 100).toFixed(1); 
+      return ((p.bet / (this.game.totalBet || 1)) * 100).toFixed(1); 
     },
     
     fmt(n) { 
@@ -2114,7 +1853,7 @@ export default {
     
     showToast(m) {
       this.toastMsg = m; 
-      if (this._toastTimer) clearTimeout(this._toastTimer);
+      clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3000);
     },
     
@@ -2207,14 +1946,8 @@ export default {
           const uRef = doc(db, 'users', this.user.id);
           const uSnap = await t.get(uRef);
           if (!uSnap.exists()) throw new Error('User not found');
-          
-          const beforeBalance = uSnap.data().balance || 0;
-          if (beforeBalance < this.withdrawAmt) throw new Error('Insufficient balance');
-          
+          if (uSnap.data().balance < this.withdrawAmt) throw new Error('Insufficient balance');
           t.update(uRef, { balance: increment(-this.withdrawAmt) });
-          
-          this.logBalanceOperation('withdraw_request', this.user.id, -this.withdrawAmt, beforeBalance, beforeBalance - this.withdrawAmt, { wallet: this.withdrawWallet });
-          
           t.set(doc(collection(db, 'withdraw_requests')), {
             userId: this.user.id,
             userName: this.user.name,
@@ -2269,9 +2002,7 @@ export default {
     },
     
     async subscribeAdmin() {
-      Object.values(this._unsubAdmin).forEach(u => {
-        if (u) u();
-      });
+      Object.values(this._unsubAdmin).forEach(u => u?.());
       
       try {
         const uSnap = await getDocs(query(
@@ -2285,9 +2016,7 @@ export default {
 
         const gSnap = await getDocs(collection(db, 'games'));
         let vol = 0;
-        gSnap.forEach(d => { 
-          vol += d.data().totalBet || 0; 
-        });
+        gSnap.forEach(d => { vol += d.data().totalBet || 0; });
         this.adminData.totalGames = gSnap.size;
         this.adminData.totalVolume = vol;
         this.adminData.commissionEarned = vol * HOUSE_FEE;
@@ -2296,7 +2025,7 @@ export default {
         let adminBal = 0;
         uSnap.docs.forEach(d => {
           const x = d.data();
-          hb += (x.balance || 0);
+          hb += (x.balance || 0) + (x.lockedBalance || 0);
           if (x.handle === ADMIN_HANDLE) adminBal = x.balance || 0;
         });
         this.adminData.houseBalance = hb;
@@ -2345,23 +2074,14 @@ export default {
           approvedAt: serverTimestamp(),
           processedBy: this.user.id
         });
-        
-        const userRef = doc(db, 'users', r.userId);
-        const userSnap = await getDoc(userRef);
-        const beforeBalance = userSnap.data()?.balance || 0;
-        
-        b.update(userRef, { 
+        b.update(doc(db, 'users', r.userId), { 
           balance: increment(-r.amount) 
         });
-        
         await b.commit();
-        
-        this.logBalanceOperation('withdraw_approved', r.userId, -r.amount, beforeBalance, beforeBalance - r.amount, { requestId: r.id });
         
         await addDoc(collection(db, 'users', r.userId, 'history'), {
           type: 'withdraw',
           amount: -r.amount,
-          description: `Withdrew ${r.amount} TON to wallet`,
           ts: serverTimestamp()
         });
         
@@ -2376,12 +2096,8 @@ export default {
     async rejectWithdraw(r) {
       r.processing = true;
       try {
-        const userRef = doc(db, 'users', r.userId);
-        const userSnap = await getDoc(userRef);
-        const beforeBalance = userSnap.data()?.balance || 0;
-        
         const b = writeBatch(db);
-        b.update(userRef, {
+        b.update(doc(db, 'users', r.userId), {
           balance: increment(r.amount)
         });
         b.update(doc(db, 'withdraw_requests', r.id), {
@@ -2389,9 +2105,6 @@ export default {
           rejectedAt: serverTimestamp()
         });
         await b.commit();
-        
-        this.logBalanceOperation('withdraw_rejected', r.userId, r.amount, beforeBalance, beforeBalance + r.amount, { requestId: r.id });
-        
         this.showToast('Rejected, funds returned');
       } catch(e) {
         this.showToast('Error: ' + e.message);
@@ -2402,14 +2115,7 @@ export default {
     
     async adminAddBalance(u, a) {
       try { 
-        const userRef = doc(db, 'users', u.id);
-        const userSnap = await getDoc(userRef);
-        const beforeBalance = userSnap.data()?.balance || 0;
-        
-        await updateDoc(userRef, { balance: increment(a) }); 
-        
-        this.logBalanceOperation('admin_add', u.id, a, beforeBalance, beforeBalance + a, { adminId: this.user.id });
-        
+        await updateDoc(doc(db, 'users', u.id), { balance: increment(a) }); 
         this.showToast(`+${a} TON → ${u.name}`); 
       } catch(e) {
         this.showToast('Error: ' + e.message);
@@ -2419,14 +2125,8 @@ export default {
     adminSetBalance(u) {
       const v = prompt(`Balance for ${u.name} (now: ${u.balance}):`);
       if (!v || isNaN(parseFloat(v))) return;
-      const newBalance = parseFloat(v);
-      const diff = newBalance - (u.balance || 0);
-      
-      updateDoc(doc(db, 'users', u.id), { balance: newBalance })
-        .then(() => {
-          this.logBalanceOperation('admin_set', u.id, diff, u.balance || 0, newBalance, { adminId: this.user.id });
-          this.showToast('Done');
-        })
+      updateDoc(doc(db, 'users', u.id), { balance: parseFloat(v) })
+        .then(() => this.showToast('Done'))
         .catch(e => this.showToast('Error: ' + e.message));
     },
   },
