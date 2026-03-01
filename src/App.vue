@@ -497,6 +497,7 @@ const REFERRAL_BONUS = 0.2;
 const ADMIN_HANDLE = 'whsxg';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+const BOT_USERNAME = 'PythonProba_bot'; // Имя вашего бота
 
 // TON Center API Configuration
 const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
@@ -574,7 +575,13 @@ export default {
         this.isConnected;
     },
     userAlreadyBet() { return this.game.players?.some(p => p.userId === this.user?.id) || false; },
-    referralLink() { return `https://t.me/TonRouletteBot?start=ref_${this.user?.id}`; },
+    referralLink() { 
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        return `https://t.me/${BOT_USERNAME}/spins?startapp=ref_${this.user?.id}`;
+      }
+      return `https://t.me/${BOT_USERNAME}?start=ref_${this.user?.id}`;
+    },
     winRate() { return !this.stats.played ? 0 : Math.round((this.stats.won / this.stats.played) * 100); },
     canWithdraw() {
       return this.withdrawAmt >= 0.1 && this.withdrawAmt <= this.balance &&
@@ -607,7 +614,7 @@ export default {
         
         if (newStatus === 'waiting' && oldStatus === 'waiting_for_players') {
           this.startGameTimer();
-        } else if (newStatus === 'spinning') {
+        } else if (newStatus === 'spinning' && oldStatus === 'waiting') {
           this.clearGameTimer();
           // Запускаем таймер для очистки и создания нового раунда после спина
           this._newRoundTimer = setTimeout(() => {
@@ -1269,9 +1276,10 @@ export default {
     getRefFromStartParam() {
       try {
         const params = new URLSearchParams(window.location.search);
-        const start = params.get('start');
-        if (start && start.startsWith('ref_')) {
-          return start.replace('ref_', '');
+        let startParam = params.get('start') || params.get('startapp');
+        
+        if (startParam && startParam.startsWith('ref_')) {
+          return startParam.replace('ref_', '');
         }
         return null;
       } catch {
@@ -1316,6 +1324,7 @@ export default {
         });
 
         console.log(`✅ Referral bonus ${REFERRAL_BONUS} TON sent to ${referrerId}`);
+        this.showToast(`🎁 +${REFERRAL_BONUS} TON referral bonus!`);
       } catch (e) {
         console.error('Error processing referral:', e);
       }
@@ -1393,7 +1402,7 @@ export default {
               name:ud.name,
               handle:ud.handle,
               emoji:ud.emoji,
-              balance:100,
+              balance:0,
               stats:{
                 played:0,
                 won:0,
@@ -1409,6 +1418,9 @@ export default {
 
           if (referrerId) {
             await this.processReferral(ud.id, referrerId);
+            this.showToast(`🎁 You were referred! +${REFERRAL_BONUS} TON bonus for referrer!`);
+          } else {
+            this.showToast('👋 Welcome! Deposit TON to start playing');
           }
         } else {
           await updateDoc(ref, {lastSeen:serverTimestamp()});
@@ -1424,7 +1436,7 @@ export default {
         this.isConnected = true;
       } catch(e) {
         console.error(e);
-        this.balance = 100; 
+        this.balance = 0; 
         this.isConnected = false;
         this.showToast('Could not connect.');
       }
@@ -1501,9 +1513,7 @@ export default {
               this.startBlockSpin(ng.winner);
             });
             
-            if (ng.winner) {
-              await this.archiveCompletedGame(ng, ng.winner);
-            }
+            // НЕ начисляем выигрыш здесь, просто запускаем спин
             
           } else if (ng.status === 'waiting' && prev !== 'waiting') {
             this.isSpinning = false;
@@ -1523,10 +1533,11 @@ export default {
             this.stripOffset = 0;
             this.game = ng;
             this.clearRouletteBlocks();
-          }
-
-          if (ng.winner && ng.status !== 'spinning' && !this.winnerOverlay) {
-            this.showWinnerOverlay(ng.winner);
+            
+            // Если был победитель в предыдущем раунде, показываем оверлей
+            if (ng.winner && !this.winnerOverlay) {
+              this.showWinnerOverlay(ng.winner);
+            }
           }
 
           this.game = ng;
@@ -1608,43 +1619,21 @@ export default {
               this.showToast('Not enough players. Bets refunded. New round started.');
               
             } else {
-              // Выбираем победителя
+              // Выбираем победителя, но НЕ начисляем приз сразу
               const winner = weightedRandom(gameData.players);
               const prize = gameData.totalBet * (1 - HOUSE_FEE);
               const commission = gameData.totalBet * HOUSE_FEE;
 
-              // Начисляем приз победителю
-              t.update(doc(db, 'users', winner.userId), {
-                balance: increment(prize),
-                'stats.won': increment(1),
-                'stats.earned': increment(prize)
-              });
-
-              // Обновляем статистику для всех игроков
-              for (const player of gameData.players) {
-                t.update(doc(db, 'users', player.userId), {
-                  'stats.played': increment(1)
-                });
-              }
-
-              // Начисляем комиссию админу
-              const adminQuery = query(collection(db, 'users'), where('handle', '==', ADMIN_HANDLE));
-              const adminSnap = await getDocs(adminQuery);
-              if (!adminSnap.empty) {
-                const adminRef = adminSnap.docs[0].ref;
-                t.update(adminRef, {
-                  balance: increment(commission),
-                  'stats.earned': increment(commission)
-                });
-              }
-
-              // Обновляем статус игры на spinning
+              // Обновляем статус игры на spinning с информацией о победителе
+              // Приз будет начислен ПОСЛЕ завершения спина
               t.update(ref, {
                 status: 'spinning',
                 winner: {
                   userId: winner.userId,
                   name: winner.name,
-                  prize: prize
+                  prize: prize,
+                  commission: commission,
+                  players: gameData.players // Сохраняем игроков для статистики
                 },
                 spinStartTime: serverTimestamp(),
                 spinDuration: SPIN_DURATION
@@ -1659,10 +1648,84 @@ export default {
       }
     },
 
+    /**
+     * Начисление выигрыша после завершения спина
+     */
+    async awardPrizeAfterSpin(gameData, winner) {
+      if (!gameData || !winner) return;
+      
+      console.log('Awarding prize after spin:', winner);
+      
+      try {
+        await runTransaction(db, async (t) => {
+          // Начисляем приз победителю
+          t.update(doc(db, 'users', winner.userId), {
+            balance: increment(winner.prize),
+            'stats.won': increment(1),
+            'stats.earned': increment(winner.prize)
+          });
+
+          // Обновляем статистику для всех игроков
+          if (winner.players) {
+            for (const player of winner.players) {
+              t.update(doc(db, 'users', player.userId), {
+                'stats.played': increment(1)
+              });
+            }
+          }
+
+          // Начисляем комиссию админу
+          const adminQuery = query(collection(db, 'users'), where('handle', '==', ADMIN_HANDLE));
+          const adminSnap = await getDocs(adminQuery);
+          if (!adminSnap.empty) {
+            const adminRef = adminSnap.docs[0].ref;
+            t.update(adminRef, {
+              balance: increment(winner.commission || 0),
+              'stats.earned': increment(winner.commission || 0)
+            });
+          }
+
+          // Сохраняем игру в архив
+          const gameArchiveRef = doc(collection(db, 'games'));
+          t.set(gameArchiveRef, {
+            roundId: gameData.roundId,
+            players: winner.players || gameData.players,
+            totalBet: gameData.totalBet,
+            winner: {
+              userId: winner.userId,
+              name: winner.name,
+              prize: winner.prize
+            },
+            commission: winner.commission || 0,
+            timestamp: serverTimestamp(),
+            endedAt: serverTimestamp()
+          });
+        });
+
+        // Добавляем запись в историю победителя
+        await addDoc(collection(db, 'users', winner.userId, 'history'), {
+          type: 'win',
+          amount: winner.prize,
+          description: `Won ${winner.prize} TON in roulette`,
+          ts: serverTimestamp()
+        });
+
+        console.log(`✅ Prize awarded: ${winner.prize} TON to ${winner.userId}`);
+        
+      } catch (e) {
+        console.error('Error awarding prize:', e);
+      }
+    },
+
     showWinnerOverlay(w) {
       if (!w) return;
       const isMe = w.userId === this.user?.id;
       const myBet = this.game.players?.find(p => p.userId === this.user?.id);
+      
+      // Начисляем выигрыш ТОЛЬКО когда показываем оверлей (после завершения спина)
+      if (this.game.winner && !this.winnerOverlay) {
+        this.awardPrizeAfterSpin(this.game, this.game.winner);
+      }
       
       this.winnerOverlay = { 
         name: w.name, 
