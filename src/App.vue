@@ -530,7 +530,7 @@ export default {
         status: 'waiting_for_players', endsAt: null,
         spinStartTime: null, spinDuration: SPIN_DURATION,
         winner: null, roundId: null,
-        prizeAwarded: false // Флаг, что приз уже начислен
+        prizeAwarded: false
       },
       isSpinning: false, timeLeft: ROUND_TIME,
       timerHandle: null, winnerOverlay: null,
@@ -539,7 +539,8 @@ export default {
       stripOffset: 0,
       _unsubGame: null, _unsubUser: null, _unsubAdmin: {},
       stats: { played: 0, won: 0, earned: 0, referrals: 0, referralEarned: 0 },
-      history: [], copied: false,
+      history: [], 
+      copied: false,
       modal: null,
       depositStep: 1, depositAmt: 10, depositLoading: false,
       depositDone: false, currentDepComment: '', depositStatus: 'Waiting...',
@@ -737,7 +738,6 @@ export default {
         
         const gameData = gameSnap.data();
         
-        // Создаем новый раунд только если игра закончена
         if (gameData.status === 'waiting_for_players' || gameData.status === 'spinning') {
           await this.createNewRound();
         }
@@ -1449,7 +1449,6 @@ export default {
             });
           }
 
-          // Обработка разных статусов игры
           if (ng.status === 'spinning' && prev !== 'spinning') {
             this.isSpinning = true;
             this.stopTimer();
@@ -1476,8 +1475,9 @@ export default {
             this.game = ng;
             this.clearRouletteBlocks();
             
-            // Если есть победитель и приз еще не начислен - показываем оверлей
+            // Если есть победитель и приз еще не начислен - начисляем и показываем оверлей
             if (ng.winner && !ng.prizeAwarded) {
+              await this.awardPrizeAfterSpin(ng, ng.winner);
               this.showWinnerOverlay(ng.winner);
             }
           }
@@ -1672,11 +1672,6 @@ export default {
       
       const isMe = w.userId === this.user?.id;
       const myBet = this.game.players?.find(p => p.userId === this.user?.id);
-      
-      // Начисляем выигрыш только если приз еще не начислен
-      if (this.game.winner && !this.game.prizeAwarded) {
-        this.awardPrizeAfterSpin(this.game, this.game.winner);
-      }
       
       this.winnerOverlay = { 
         name: w.name, 
