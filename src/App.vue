@@ -490,11 +490,17 @@ const COLORS = ['#ff4757','#3742fa','#2ed573','#ffa502','#a55eea','#1e90ff','#ff
 const ROUND_TIME = 30;
 const HOUSE_FEE = 0.05;
 const MIN_PLAYERS = 2;
-const HOUSE_WALLET = '0QBbz6lrdck00jKezlUKQAn1QzV1uOB1uUs5caKFv-m1zxCM';
+const HOUSE_WALLET = 'UQCH_BLQPJtnfj75s3YBu3bmaUTlRi6_I7difhNqINwrRC0i';
 const SPIN_DURATION = 5000;
 const TRACK_REPEAT = 4;
 const REFERRAL_BONUS = 0.2;
 const ADMIN_HANDLE = 'whsxg';
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+
+// TON Center API Configuration
+const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
+const TONCENTER_API_URL = 'https://toncenter.com/api/v2/jsonRPC';
 
 function randInt(n) { return Math.floor(Math.random() * n); }
 function weightedRandom(players) {
@@ -506,7 +512,7 @@ function weightedRandom(players) {
 function isValidAddr(a) {
   if (!a) return false;
   a = a.trim();
-  return a.startsWith('EQ') || a.startsWith('UQ') || a.startsWith('0:');
+  return a.startsWith('EQ') || a.startsWith('UQ') || a.startsWith('0:') || a.startsWith('EQC') || a.startsWith('UQB');
 }
 
 export default {
@@ -544,8 +550,18 @@ export default {
       toastMsg: '', _toastTimer: null,
       _depositCheckInterval: null, _lastCheckedTx: {}, _isCheckingDeposits: false,
       _reconnectTimer: null,
-      // Флаг для проверки создания игры
       _isCreatingGame: false,
+      _gameEndTimer: null,
+      _retryCount: 0,
+      _newRoundTimer: null,
+      
+      // TON Center related
+      lastTxCheck: null,
+      txCheckInProgress: false,
+      depositAddress: HOUSE_WALLET,
+      
+      // Stats for new game
+      lastRoundStats: null,
     };
   },
 
@@ -569,13 +585,45 @@ export default {
       const idx = this.tab === 'game' ? 0 : this.tab === 'profile' ? 1 : 2;
       return { transform: `translateX(${idx * 100}%)` };
     },
+    toncenterExplorerUrl() {
+      return `https://tonviewer.com/${this.depositAddress}`;
+    },
   },
 
   watch: {
     'game.players': {
-      handler() { this.buildRouletteBlocks(); },
-      deep: true
+      handler(newPlayers, oldPlayers) {
+        console.log('Players changed:', newPlayers);
+        this.$nextTick(() => {
+          this.buildRouletteBlocks();
+        });
+      },
+      deep: true,
+      immediate: true
     },
+    'game.status': {
+      handler(newStatus, oldStatus) {
+        console.log(`Game status changed: ${oldStatus} -> ${newStatus}`);
+        
+        if (newStatus === 'waiting' && oldStatus === 'waiting_for_players') {
+          this.startGameTimer();
+        } else if (newStatus === 'spinning') {
+          this.clearGameTimer();
+          // Запускаем таймер для очистки и создания нового раунда после спина
+          this._newRoundTimer = setTimeout(() => {
+            this.clearRouletteBlocks();
+            this.createNewRoundAfterSpin();
+          }, SPIN_DURATION + 2000);
+        } else if (newStatus === 'waiting_for_players' && oldStatus === 'spinning') {
+          this.prepareNewRound();
+        }
+        
+        // При любом изменении статуса перестраиваем блоки
+        this.$nextTick(() => {
+          this.buildRouletteBlocks();
+        });
+      }
+    }
   },
 
   mounted() {
@@ -583,23 +631,609 @@ export default {
     this._depositCheckInterval = setInterval(() => {
       if (this.user && !this._isCheckingDeposits && this.isConnected)
         this.checkPendingDeposits();
-    }, 15000);
+    }, 30000);
     this._reconnectTimer = setInterval(() => {
       if (!this.isConnected && this.user) this.reconnect();
     }, 5000);
+    
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
   },
 
   beforeUnmount() {
     this.stopTimer();
+    this.clearGameTimer();
+    if (this._newRoundTimer) clearTimeout(this._newRoundTimer);
     this._unsubGame?.();
     this._unsubUser?.();
     Object.values(this._unsubAdmin).forEach(u => u?.());
     clearInterval(this._depositCheckInterval);
     clearInterval(this._reconnectTimer);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
   },
 
   methods: {
-    // ==================== ИНИЦИАЛИЗАЦИЯ ИГРЫ ====================
+    // ==================== БЛОКИ РУЛЕТКИ ====================
+    
+    /**
+     * Построение блоков рулетки
+     */
+    buildRouletteBlocks() {
+      console.log('Building roulette blocks...');
+      
+      if (!this.game.players || this.game.players.length === 0) {
+        console.log('No players, clearing blocks');
+        this.rouletteBlocks = [];
+        this.stripOffset = 0;
+        return;
+      }
+      
+      const total = this.game.totalBet || 1;
+      console.log(`Total bet: ${total}, Players: ${this.game.players.length}`);
+      
+      const base = this.game.players.map((p, i) => {
+        const width = Math.max(60, Math.round((p.bet / total) * 400));
+        console.log(`Player ${p.name}: bet=${p.bet}, width=${width}`);
+        
+        return {
+          userId: p.userId,
+          emoji: p.emoji,
+          shortName: p.name.split(' ')[0].slice(0, 8),
+          bet: p.bet,
+          color: COLORS[i % COLORS.length],
+          width: width,
+          isWinner: false,
+        };
+      });
+      
+      let blocks = [];
+      for (let r = 0; r < TRACK_REPEAT; r++) {
+        base.forEach(b => blocks.push({ ...b, _rep: r }));
+      }
+      
+      console.log(`Created ${blocks.length} blocks`);
+      this.rouletteBlocks = blocks;
+      this.stripOffset = 0;
+      
+      // Принудительно обновляем DOM
+      this.$forceUpdate();
+    },
+
+    /**
+     * Очистка блоков рулетки
+     */
+    clearRouletteBlocks() {
+      console.log('Clearing roulette blocks...');
+      this.rouletteBlocks = [];
+      this.stripOffset = 0;
+      
+      // Принудительно обновляем DOM
+      this.$forceUpdate();
+      this.$nextTick(() => {
+        const strip = this.$refs?.rouletteStrip;
+        if (strip) {
+          strip.style.transform = 'translateX(0px)';
+        }
+      });
+    },
+
+    /**
+     * Сброс всех игровых состояний
+     */
+    resetGameState() {
+      console.log('Resetting game state...');
+      this.isSpinning = false;
+      this.winnerOverlay = null;
+      this.stripOffset = 0;
+      this.clearRouletteBlocks();
+      this.stopTimer();
+      this.clearGameTimer();
+    },
+
+    // ==================== УПРАВЛЕНИЕ ИГРОЙ ====================
+    
+    /**
+     * Создание нового раунда после завершения спина
+     */
+    async createNewRoundAfterSpin() {
+      console.log('Creating new round after spin...');
+      
+      // Сначала очищаем блоки
+      this.clearRouletteBlocks();
+      
+      try {
+        const gameRef = doc(db, 'config', 'currentGame');
+        const gameSnap = await getDoc(gameRef);
+        
+        if (!gameSnap.exists()) {
+          await this.createNewRound();
+          return;
+        }
+        
+        const gameData = gameSnap.data();
+        
+        // Если игра все еще в статусе spinning или waiting_for_players, создаем новый раунд
+        if (gameData.status === 'spinning' || gameData.status === 'waiting_for_players') {
+          await this.createNewRound();
+        }
+      } catch (e) {
+        console.error('Error creating new round after spin:', e);
+        this.clearRouletteBlocks();
+      }
+    },
+
+    /**
+     * Обработка изменения видимости страницы
+     */
+    handleVisibilityChange() {
+      if (!document.hidden && this.user) {
+        this.syncGameState();
+      }
+    },
+
+    /**
+     * Синхронизация состояния игры
+     */
+    async syncGameState() {
+      try {
+        const gameRef = doc(db, 'config', 'currentGame');
+        const gameSnap = await getDoc(gameRef);
+        
+        if (!gameSnap.exists()) {
+          await this.createNewRound();
+          return;
+        }
+
+        const gameData = gameSnap.data();
+        
+        // Проверяем, не зависла ли игра
+        if (gameData.status === 'spinning') {
+          const spinStartTime = gameData.spinStartTime?.toMillis?.() || 0;
+          if (Date.now() - spinStartTime > SPIN_DURATION + 5000) {
+            console.log('Game appears stuck, creating new round');
+            this.clearRouletteBlocks();
+            await this.createNewRound();
+          }
+        } else if (gameData.status === 'waiting') {
+          const endsAt = gameData.endsAt?.toMillis?.() || 0;
+          if (Date.now() > endsAt + 5000) {
+            console.log('Game timer expired, forcing round end');
+            await this.triggerRoundEnd(true);
+          }
+        }
+      } catch (e) {
+        console.error('Error syncing game state:', e);
+      }
+    },
+
+    /**
+     * Очистка таймера игры
+     */
+    clearGameTimer() {
+      if (this._gameEndTimer) {
+        clearTimeout(this._gameEndTimer);
+        this._gameEndTimer = null;
+      }
+    },
+
+    /**
+     * Запуск таймера игры
+     */
+    startGameTimer() {
+      this.clearGameTimer();
+      if (!this.game.endsAt) return;
+      
+      const timeUntilEnd = this.game.endsAt - Date.now();
+      if (timeUntilEnd <= 0) {
+        this.triggerRoundEnd();
+      } else {
+        this._gameEndTimer = setTimeout(() => {
+          this.triggerRoundEnd();
+        }, timeUntilEnd);
+      }
+    },
+
+    /**
+     * Подготовка нового раунда
+     */
+    prepareNewRound() {
+      // Сохраняем статистику предыдущего раунда
+      if (this.game.winner) {
+        this.lastRoundStats = {
+          winner: this.game.winner,
+          totalBet: this.game.totalBet,
+          playersCount: this.game.players.length,
+          timestamp: Date.now()
+        };
+      }
+      
+      // Очищаем все состояния
+      this.resetGameState();
+      
+      // Автоматически создаем новый раунд
+      this.startNewRound();
+    },
+
+    /**
+     * Принудительный запуск следующего раунда
+     */
+    async forceNextRound() {
+      try {
+        await runTransaction(db, async (t) => {
+          const gameRef = doc(db, 'config', 'currentGame');
+          const gameSnap = await t.get(gameRef);
+          
+          if (!gameSnap.exists()) return;
+          
+          const gameData = gameSnap.data();
+          
+          if (gameData.status === 'spinning' || gameData.status === 'waiting') {
+            // Возвращаем ставки игрокам
+            if (gameData.players && gameData.players.length > 0) {
+              for (const player of gameData.players) {
+                t.update(doc(db, 'users', player.userId), {
+                  balance: increment(player.bet)
+                });
+              }
+            }
+            
+            // Создаем новый раунд
+            t.set(gameRef, {
+              players: [],
+              totalBet: 0,
+              status: 'waiting_for_players',
+              endsAt: null,
+              winner: null,
+              spinStartTime: null,
+              spinDuration: SPIN_DURATION,
+              roundId: Date.now(),
+              createdAt: serverTimestamp()
+            });
+          }
+        });
+        
+        // Очищаем блоки
+        this.clearRouletteBlocks();
+        this.showToast('🔄 Starting new round...');
+      } catch (e) {
+        console.error('Error forcing next round:', e);
+        this.showToast('❌ Error starting new round');
+      }
+    },
+
+    /**
+     * Запуск нового раунда
+     */
+    async startNewRound() {
+      if (this._isCreatingGame) return;
+      
+      this._isCreatingGame = true;
+      
+      try {
+        await this.createNewRound();
+        this.showToast('🎮 New round started!');
+      } catch (e) {
+        console.error('Error starting new round:', e);
+        this.showToast('❌ Error starting new round');
+      } finally {
+        this._isCreatingGame = false;
+      }
+    },
+
+    /**
+     * Создание нового раунда в Firestore
+     */
+    async createNewRound() {
+      console.log('Creating new round...');
+      
+      try {
+        const gameRef = doc(db, 'config', 'currentGame');
+        const newRoundId = Date.now();
+        
+        await setDoc(gameRef, {
+          players: [],
+          totalBet: 0,
+          status: 'waiting_for_players',
+          endsAt: null,
+          winner: null,
+          spinStartTime: null,
+          spinDuration: SPIN_DURATION,
+          roundId: newRoundId,
+          createdAt: serverTimestamp()
+        });
+        
+        console.log(`✅ New round created with ID: ${newRoundId}`);
+        
+        // Обновляем локальное состояние и очищаем блоки
+        this.game = {
+          ...this.game,
+          players: [],
+          totalBet: 0,
+          status: 'waiting_for_players',
+          endsAt: null,
+          winner: null,
+          roundId: newRoundId
+        };
+        
+        // Очищаем блоки
+        this.clearRouletteBlocks();
+        
+      } catch (e) {
+        console.error('Error creating new round:', e);
+        throw e;
+      }
+    },
+
+    /**
+     * Сохранение завершенной игры в архив
+     */
+    async archiveCompletedGame(gameData, winner) {
+      if (!gameData || !winner) return;
+      
+      try {
+        await addDoc(collection(db, 'games'), {
+          roundId: gameData.roundId,
+          players: gameData.players,
+          totalBet: gameData.totalBet,
+          winner: winner,
+          prize: winner.prize,
+          commission: gameData.totalBet * HOUSE_FEE,
+          timestamp: serverTimestamp(),
+          endsAt: gameData.endsAt
+        });
+        
+        console.log('✅ Game archived successfully');
+      } catch (e) {
+        console.error('Error archiving game:', e);
+      }
+    },
+
+    // ==================== TON CENTER API METHODS ====================
+    
+    async fetchTonCenterTransactions(limit = 50) {
+      if (!this.depositAddress) return [];
+      
+      try {
+        const payload = {
+          id: 1,
+          jsonrpc: "2.0",
+          method: "getTransactions",
+          params: {
+            address: this.depositAddress,
+            limit: limit
+          }
+        };
+
+        const headers = {
+          'Content-Type': 'application/json',
+          'X-API-Key': TONCENTER_API_KEY
+        };
+
+        const response = await fetch(TONCENTER_API_URL, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        if (data.error) {
+          console.error('TON Center API error:', data.error);
+          return [];
+        }
+
+        const transactions = data.result || [];
+        
+        const parsedTxs = transactions.map(tx => {
+          const inMsg = tx.in_msg || {};
+          let amount = 0;
+          let comment = '';
+          let hash = tx.transaction_id?.hash || tx.hash || '';
+          let from = '';
+          let timestamp = tx.utime || Math.floor(Date.now() / 1000);
+          
+          if (inMsg && inMsg.value) {
+            amount = parseInt(inMsg.value) / 1e9;
+            
+            if (inMsg.msg_data) {
+              if (inMsg.msg_data['@type'] === 'msg.dataText') {
+                const textBase64 = inMsg.msg_data.text || '';
+                if (textBase64) {
+                  try {
+                    const decoded = atob(textBase64.replace(/^base64:/, ''));
+                    comment = decoded.replace(/\0/g, '');
+                  } catch (e) {
+                    console.warn('Failed to decode comment:', e);
+                  }
+                }
+              } else if (inMsg.msg_data.text) {
+                comment = inMsg.msg_data.text;
+              }
+            }
+            
+            from = inMsg.source || '';
+          }
+          
+          return {
+            hash,
+            amount,
+            comment: comment.trim(),
+            from,
+            timestamp,
+            lt: tx.transaction_id?.lt || tx.lt || 0,
+          };
+        }).filter(tx => tx.amount > 0);
+        
+        return parsedTxs;
+        
+      } catch (error) {
+        console.error('Error fetching from TON Center:', error);
+        return [];
+      }
+    },
+
+    async checkPendingDeposits() {
+      if (!this.user || this._isCheckingDeposits) return;
+      
+      this._isCheckingDeposits = true;
+      
+      try {
+        const q = query(
+          collection(db, 'deposit_requests'),
+          where('userId', '==', this.user.id),
+          where('status', '==', 'pending'),
+          orderBy('ts', 'desc'),
+          limit(10)
+        );
+        
+        const snap = await getDocs(q);
+        
+        if (snap.empty) {
+          this._isCheckingDeposits = false;
+          return;
+        }
+
+        const transactions = await this.fetchTonCenterTransactions(30);
+        
+        if (!transactions || transactions.length === 0) {
+          this._isCheckingDeposits = false;
+          return;
+        }
+
+        for (const depositDoc of snap.docs) {
+          const deposit = depositDoc.data();
+          
+          if (this._lastCheckedTx[depositDoc.id] && 
+              Date.now() - this._lastCheckedTx[depositDoc.id] < 60000) {
+            continue;
+          }
+
+          for (const tx of transactions) {
+            if (!tx.comment) continue;
+            
+            const txComment = tx.comment.replace(/\0/g, '').trim();
+            const depositComment = deposit.comment.replace(/\0/g, '').trim();
+            
+            if (txComment.includes(depositComment) || depositComment.includes(txComment)) {
+              if (Math.abs(tx.amount - deposit.amount) < 0.01) {
+                await this.processDeposit(depositDoc.ref, deposit, tx);
+                this._lastCheckedTx[depositDoc.id] = Date.now();
+                break;
+              }
+            }
+          }
+          
+          if (deposit.ts && (Date.now() - (deposit.ts.toDate?.() || deposit.ts)) > 24 * 60 * 60 * 1000) {
+            await updateDoc(depositDoc.ref, { 
+              status: 'expired',
+              expiredAt: serverTimestamp()
+            });
+          }
+        }
+        
+      } catch (error) {
+        console.error('Error checking pending deposits:', error);
+      } finally {
+        this._isCheckingDeposits = false;
+      }
+    },
+
+    async processDeposit(docRef, deposit, tx) {
+      try {
+        await runTransaction(db, async (transaction) => {
+          const userRef = doc(db, 'users', deposit.userId);
+          const userSnap = await transaction.get(userRef);
+          
+          if (!userSnap.exists()) {
+            throw new Error('User not found');
+          }
+
+          if (deposit.status === 'completed') {
+            return;
+          }
+
+          transaction.update(userRef, { 
+            balance: increment(deposit.amount) 
+          });
+
+          transaction.update(docRef, { 
+            status: 'completed',
+            txHash: tx.hash,
+            txFrom: tx.from,
+            txTime: tx.timestamp,
+            completedAt: serverTimestamp()
+          });
+
+          const statsRef = doc(db, 'config', 'stats');
+          transaction.set(statsRef, {
+            totalDeposits: increment(deposit.amount),
+            totalTransactions: increment(1)
+          }, { merge: true });
+        });
+
+        await addDoc(collection(db, 'users', deposit.userId, 'history'), {
+          type: 'deposit',
+          amount: deposit.amount,
+          txHash: tx.hash,
+          description: `Deposit of ${deposit.amount} TON`,
+          ts: serverTimestamp()
+        });
+
+        this.showToast(`✅ +${this.fmt(deposit.amount)} TON deposited!`);
+        
+        if (this.user?.id === deposit.userId && this.modal === 'deposit') {
+          this.depositStatus = '✅ Confirmed!';
+          this.depositDone = true;
+          setTimeout(() => this.closeModal(), 2000);
+        }
+
+      } catch (error) {
+        console.error('Error processing deposit:', error);
+        this.showToast('❌ Error processing deposit');
+      }
+    },
+
+    async manualCheckDeposit() {
+      this.depositLoading = true;
+      this.depositStatus = '🔍 Checking blockchain...';
+      
+      try {
+        await this.checkPendingDeposits();
+        
+        const q = query(
+          collection(db, 'deposit_requests'),
+          where('userId', '==', this.user.id),
+          where('comment', '==', this.currentDepComment),
+          limit(1)
+        );
+        
+        const snap = await getDocs(q);
+        
+        if (!snap.empty) {
+          const deposit = snap.docs[0].data();
+          if (deposit.status === 'completed') {
+            this.depositStatus = '✅ Confirmed!';
+            this.depositDone = true;
+          } else {
+            this.depositStatus = '⏳ Still waiting for confirmation...';
+          }
+        } else {
+          this.depositStatus = '❌ Deposit request not found';
+        }
+        
+      } catch (error) {
+        console.error('Error in manual check:', error);
+        this.depositStatus = '❌ Check failed';
+      } finally {
+        this.depositLoading = false;
+      }
+    },
+
+    // ==================== ИНИЦИАЛИЗАЦИЯ ====================
+    
     async ensureGameExists() {
       if (this._isCreatingGame) return;
       
@@ -610,8 +1244,20 @@ export default {
         
         if (!gameSnap.exists()) {
           console.log('No active game found, creating new game...');
-          await this.createFirestoreRound();
+          await this.createNewRound();
           this.showToast('🎮 New game created!');
+        } else {
+          const gameData = gameSnap.data();
+          
+          // Проверяем, не зависла ли игра
+          if (gameData.status === 'spinning') {
+            const spinStartTime = gameData.spinStartTime?.toMillis?.() || 0;
+            if (Date.now() - spinStartTime > SPIN_DURATION + 5000) {
+              console.log('Found stuck game, resetting...');
+              this.clearRouletteBlocks();
+              await this.createNewRound();
+            }
+          }
         }
       } catch (e) {
         console.error('Error ensuring game exists:', e);
@@ -620,7 +1266,6 @@ export default {
       }
     },
 
-    // ==================== РЕФЕРАЛЬНАЯ СИСТЕМА ====================
     getRefFromStartParam() {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -677,30 +1322,6 @@ export default {
     },
 
     // ── BLOCK ROULETTE ──
-    buildRouletteBlocks() {
-      if (!this.game.players || this.game.players.length === 0) {
-        this.rouletteBlocks = [];
-        this.stripOffset = 0;
-        return;
-      }
-      const total = this.game.totalBet || 1;
-      const base = this.game.players.map((p, i) => ({
-        userId: p.userId,
-        emoji: p.emoji,
-        shortName: p.name.split(' ')[0].slice(0, 8),
-        bet: p.bet,
-        color: COLORS[i % COLORS.length],
-        width: Math.max(60, Math.round((p.bet / total) * 400)),
-        isWinner: false,
-      }));
-      let blocks = [];
-      for (let r = 0; r < TRACK_REPEAT; r++) {
-        base.forEach(b => blocks.push({ ...b, _rep: r }));
-      }
-      this.rouletteBlocks = blocks;
-      this.stripOffset = 0;
-    },
-
     startBlockSpin(winnerData) {
       if (!this.game.players.length || !winnerData) return;
       const total = this.game.totalBet || 1;
@@ -741,57 +1362,6 @@ export default {
       }
     },
 
-    // ── TONCENTER ──
-    async fetchTonCenterTransactions() { return []; },
-
-    async checkPendingDeposits() {
-      if (!this.user || this._isCheckingDeposits) return;
-      this._isCheckingDeposits = true;
-      try {
-        const q = query(collection(db,'deposit_requests'),
-          where('userId','==',this.user.id), where('status','==','pending'), limit(5));
-        const snap = await getDocs(q);
-        if (snap.empty) return;
-        const txs = await this.fetchTonCenterTransactions();
-        if (!txs?.length) return;
-        for (const ds of snap.docs) {
-          const dep = ds.data();
-          if (this._lastCheckedTx[dep.id]) continue;
-          for (const tx of txs) {
-            if (!tx.comment) continue;
-            if (tx.comment.replace(/\0/g,'').trim().includes(dep.comment.replace(/\0/g,'').trim())) {
-              await this.processDeposit(ds.ref, dep, tx);
-              this._lastCheckedTx[dep.id] = true;
-              break;
-            }
-          }
-        }
-      } catch(e) { console.error(e); } finally { this._isCheckingDeposits = false; }
-    },
-
-    async processDeposit(docRef, deposit, tx) {
-      try {
-        await runTransaction(db, async (t) => {
-          const uRef = doc(db,'users',deposit.userId);
-          const uSnap = await t.get(uRef);
-          if (!uSnap.exists()) throw new Error('User not found');
-          t.update(uRef, { balance: increment(deposit.amount) });
-          t.update(docRef, { status:'completed', txHash:tx.hash, completedAt:serverTimestamp() });
-        });
-        await addDoc(collection(db,'users',deposit.userId,'history'), {
-          type:'deposit', amount:deposit.amount, txHash:tx.hash, ts:serverTimestamp()
-        });
-        await setDoc(doc(db,'config','stats'), {
-          totalDeposits: increment(deposit.amount), totalTransactions: increment(1)
-        }, { merge:true });
-        this.showToast(`✅ +${this.fmt(deposit.amount)} TON deposited!`);
-        if (this.user?.id === deposit.userId && this.modal === 'deposit') {
-          this.depositStatus = 'Confirmed!'; this.depositDone = true;
-          setTimeout(() => this.closeModal(), 2000);
-        }
-      } catch(e) { console.error(e); }
-    },
-
     // ── AUTH ──
     tryTelegram() {
       const tg = window.Telegram?.WebApp;
@@ -814,7 +1384,7 @@ export default {
       const referrerId = this.getRefFromStartParam();
 
       try {
-        const ref = doc(db,'users',ud.id);
+        const ref = doc(db, 'users', ud.id);
         const snap = await getDoc(ref);
 
         if (!snap.exists()) {
@@ -834,7 +1404,7 @@ export default {
               referredBy: referrerId,
               createdAt: serverTimestamp()
             });
-            t.set(doc(db,'config','stats'), {totalUsers:increment(1)}, {merge:true});
+            t.set(doc(db, 'config', 'stats'), {totalUsers:increment(1)}, {merge:true});
           });
 
           if (referrerId) {
@@ -848,7 +1418,6 @@ export default {
         this.listenToUser();
         await this.loadHistory();
         
-        // Проверяем и создаем игру если нужно
         await this.ensureGameExists();
         this.subscribeGame();
         
@@ -863,7 +1432,7 @@ export default {
 
     listenToUser() {
       if (!this.user) return;
-      this._unsubUser = onSnapshot(doc(db,'users',this.user.id), (snap) => {
+      this._unsubUser = onSnapshot(doc(db, 'users', this.user.id), (snap) => {
         if (!snap.exists()) return;
         const d = snap.data();
         this.balance = d.balance || 0;
@@ -873,74 +1442,119 @@ export default {
 
     // ── GAME ──
     subscribeGame() {
-      const gameRef = doc(db,'config','currentGame');
+      const gameRef = doc(db, 'config', 'currentGame');
       let prev = '';
+      let processing = false;
       
       this._unsubGame = onSnapshot(gameRef, async (snap) => {
-        this.isConnected = true;
+        if (processing) return;
+        processing = true;
         
-        if (!snap.exists()) {
-          console.log('Game snapshot: game does not exist');
-          // Не создаем игру здесь, чтобы избежать циклов
-          // Игра будет создана при необходимости через ensureGameExists
-          this.game = {
-            id: null,
-            players: [],
-            totalBet: 0,
-            status: 'waiting_for_players',
-            endsAt: null,
-            winner: null,
-            roundId: null
+        try {
+          this.isConnected = true;
+          
+          if (!snap.exists()) {
+            console.log('Game snapshot: game does not exist');
+            this.game = {
+              id: null,
+              players: [],
+              totalBet: 0,
+              status: 'waiting_for_players',
+              endsAt: null,
+              winner: null,
+              roundId: null
+            };
+            
+            this.clearRouletteBlocks();
+            await this.createNewRound();
+            return;
+          }
+          
+          const d = snap.data();
+          const ng = {
+            id:snap.id, 
+            players:d.players||[], 
+            totalBet:d.totalBet||0,
+            status:d.status, 
+            endsAt:d.endsAt?.toMillis?.()||null,
+            spinStartTime:d.spinStartTime?.toMillis?.()||null,
+            spinDuration:d.spinDuration||SPIN_DURATION,
+            winner:d.winner||null, 
+            roundId:d.roundId||Date.now()
           };
-          return;
+
+          // Всегда перестраиваем блоки при изменении игроков
+          if (JSON.stringify(ng.players) !== JSON.stringify(this.game.players)) {
+            console.log('Players changed, rebuilding blocks...');
+            this.$nextTick(() => {
+              this.buildRouletteBlocks();
+            });
+          }
+
+          if (ng.status === 'spinning' && prev !== 'spinning') {
+            this.isSpinning = true;
+            this.stopTimer();
+            this.clearGameTimer();
+            this.game = ng;
+            this.$nextTick(() => {
+              this.buildRouletteBlocks();
+              this.startBlockSpin(ng.winner);
+            });
+            
+            if (ng.winner) {
+              await this.archiveCompletedGame(ng, ng.winner);
+            }
+            
+          } else if (ng.status === 'waiting' && prev !== 'waiting') {
+            this.isSpinning = false;
+            this.winnerOverlay = null;
+            this.game = ng;
+            this.startClientTimer();
+            this.$nextTick(() => {
+              this.buildRouletteBlocks();
+            });
+            
+          } else if (ng.status === 'waiting_for_players' && prev !== 'waiting_for_players') {
+            this.isSpinning = false;
+            this.winnerOverlay = null;
+            this.timeLeft = ROUND_TIME;
+            this.stopTimer();
+            this.clearGameTimer();
+            this.stripOffset = 0;
+            this.game = ng;
+            this.clearRouletteBlocks();
+          }
+
+          if (ng.winner && ng.status !== 'spinning' && !this.winnerOverlay) {
+            this.showWinnerOverlay(ng.winner);
+          }
+
+          this.game = ng;
+          prev = ng.status;
+          
+        } catch (e) {
+          console.error('Error processing game snapshot:', e);
+        } finally {
+          processing = false;
         }
         
-        const d = snap.data();
-        const ng = {
-          id:snap.id, 
-          players:d.players||[], 
-          totalBet:d.totalBet||0,
-          status:d.status, 
-          endsAt:d.endsAt?.toMillis?.()||null,
-          spinStartTime:d.spinStartTime?.toMillis?.()||null,
-          spinDuration:d.spinDuration||SPIN_DURATION,
-          winner:d.winner||null, 
-          roundId:d.roundId||Date.now()
-        };
-
-        if (ng.status==='spinning' && prev!=='spinning') {
-          this.isSpinning = true; 
-          this.stopTimer();
-          this.game = ng;
-          this.buildRouletteBlocks();
-          this.$nextTick(() => this.startBlockSpin(ng.winner));
-        } else if (ng.status==='waiting' && prev!=='waiting') {
-          this.isSpinning = false; 
-          this.winnerOverlay = null; 
-          this.startClientTimer();
-        } else if (ng.status==='waiting_for_players' && prev!=='waiting_for_players') {
-          this.isSpinning = false; 
-          this.winnerOverlay = null;
-          this.timeLeft = ROUND_TIME; 
-          this.stopTimer();
-          this.stripOffset = 0;
-        }
-
-        if (ng.winner && ng.status!=='spinning' && !this.winnerOverlay)
-          this.showWinnerOverlay(ng.winner);
-
-        this.game = ng; 
-        prev = ng.status;
       }, (err) => {
-        console.error('Game snapshot error:', err); 
+        console.error('Game snapshot error:', err);
         this.isConnected = false;
+        this._retryCount++;
+        
+        if (this._retryCount < MAX_RETRIES) {
+          setTimeout(() => {
+            this.subscribeGame();
+          }, RETRY_DELAY * this._retryCount);
+        }
       });
     },
 
     startClientTimer() {
       this.stopTimer();
       this.timerHandle = setInterval(() => {
-        if (this.isSpinning || this.game.status!=='waiting' || !this.game.endsAt) return;
+        if (this.isSpinning || this.game.status !== 'waiting' || !this.game.endsAt) return;
         this.timeLeft = Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000));
         if (this.timeLeft <= 0 && !this.isSpinning) { 
           this.stopTimer(); 
@@ -949,67 +1563,72 @@ export default {
       }, 500);
     },
 
-    stopTimer() { clearInterval(this.timerHandle); this.timerHandle = null; },
-
-    async createFirestoreRound() {
-      console.log('Creating new game round...');
-      try {
-        await setDoc(doc(db,'config','currentGame'), {
-          players:[], 
-          totalBet:0, 
-          status:'waiting_for_players',
-          endsAt:null, 
-          winner:null, 
-          spinStartTime:null,
-          spinDuration:SPIN_DURATION, 
-          roundId:Date.now(), 
-          createdAt:serverTimestamp()
-        });
-        console.log('Game round created successfully');
-      } catch(e) { 
-        console.error('Create round error:', e); 
+    stopTimer() { 
+      if (this.timerHandle) {
+        clearInterval(this.timerHandle); 
+        this.timerHandle = null; 
       }
     },
 
     async triggerRoundEnd(force=false) {
       if (this.isSpinning) return;
+      
       try {
         await runTransaction(db, async (t) => {
-          const ref = doc(db,'config','currentGame');
-          const gd = (await t.get(ref)).data();
-          if (!gd) return;
+          const ref = doc(db, 'config', 'currentGame');
+          const gameSnap = await t.get(ref);
           
-          if (gd.status==='waiting' && (force||Date.now()>=(gd.endsAt?.toMillis()||0))) {
+          if (!gameSnap.exists()) return;
+          
+          const gameData = gameSnap.data();
+          
+          if (gameData.status === 'waiting' && (force || Date.now() >= (gameData.endsAt?.toMillis?.() || 0))) {
+            
             // Если недостаточно игроков - возвращаем ставки
-            if (!gd.players || gd.players.length < MIN_PLAYERS) {
-              for (const p of gd.players) {
-                t.update(doc(db,'users',p.userId), {balance:increment(p.bet)});
+            if (!gameData.players || gameData.players.length < MIN_PLAYERS) {
+              for (const player of gameData.players) {
+                t.update(doc(db, 'users', player.userId), {
+                  balance: increment(player.bet)
+                });
               }
-              t.update(ref, {
-                players:[],
-                totalBet:0,
-                status:'waiting_for_players',
-                endsAt:null,
-                winner:null,
-                spinStartTime:null,
-                roundId:Date.now()
+              
+              // Создаем новый раунд
+              t.set(ref, {
+                players: [],
+                totalBet: 0,
+                status: 'waiting_for_players',
+                endsAt: null,
+                winner: null,
+                spinStartTime: null,
+                spinDuration: SPIN_DURATION,
+                roundId: Date.now(),
+                createdAt: serverTimestamp()
               });
-              this.showToast('Not enough players. Bets refunded.');
+              
+              this.showToast('Not enough players. Bets refunded. New round started.');
+              
             } else {
               // Выбираем победителя
-              const winner = weightedRandom(gd.players);
-              const prize = gd.totalBet * (1 - HOUSE_FEE);
-              const commission = gd.totalBet * HOUSE_FEE;
+              const winner = weightedRandom(gameData.players);
+              const prize = gameData.totalBet * (1 - HOUSE_FEE);
+              const commission = gameData.totalBet * HOUSE_FEE;
 
-              t.update(ref, {
-                status:'spinning',
-                winner:{userId:winner.userId, name:winner.name, prize},
-                spinStartTime:serverTimestamp(),
-                spinDuration:SPIN_DURATION
+              // Начисляем приз победителю
+              t.update(doc(db, 'users', winner.userId), {
+                balance: increment(prize),
+                'stats.won': increment(1),
+                'stats.earned': increment(prize)
               });
 
+              // Обновляем статистику для всех игроков
+              for (const player of gameData.players) {
+                t.update(doc(db, 'users', player.userId), {
+                  'stats.played': increment(1)
+                });
+              }
+
               // Начисляем комиссию админу
-              const adminQuery = query(collection(db,'users'), where('handle','==',ADMIN_HANDLE));
+              const adminQuery = query(collection(db, 'users'), where('handle', '==', ADMIN_HANDLE));
               const adminSnap = await getDocs(adminQuery);
               if (!adminSnap.empty) {
                 const adminRef = adminSnap.docs[0].ref;
@@ -1018,282 +1637,434 @@ export default {
                   'stats.earned': increment(commission)
                 });
               }
+
+              // Обновляем статус игры на spinning
+              t.update(ref, {
+                status: 'spinning',
+                winner: {
+                  userId: winner.userId,
+                  name: winner.name,
+                  prize: prize
+                },
+                spinStartTime: serverTimestamp(),
+                spinDuration: SPIN_DURATION
+              });
             }
           }
         });
-      } catch(e) { console.error(e); }
+        
+      } catch (e) {
+        console.error('Error in triggerRoundEnd:', e);
+        this.showToast('❌ Error ending round');
+      }
     },
 
     showWinnerOverlay(w) {
       if (!w) return;
-      const isMe = w.userId===this.user?.id;
-      const myBet = this.game.players?.find(p=>p.userId===this.user?.id);
-      this.winnerOverlay = { name:w.name, prize:w.prize, isMe, myLoss:myBet&&!isMe?myBet.bet:0 };
+      const isMe = w.userId === this.user?.id;
+      const myBet = this.game.players?.find(p => p.userId === this.user?.id);
+      
+      this.winnerOverlay = { 
+        name: w.name, 
+        prize: w.prize, 
+        isMe, 
+        myLoss: myBet && !isMe ? myBet.bet : 0 
+      };
+      
       this.isSpinning = false;
-      setTimeout(()=>{ if(this.winnerOverlay) this.dismissWinner(); }, 6000);
+      
+      setTimeout(() => {
+        if (this.winnerOverlay) {
+          this.dismissWinner();
+        }
+      }, 6000);
     },
 
-    dismissWinner() { this.winnerOverlay = null; },
+    dismissWinner() { 
+      this.winnerOverlay = null; 
+    },
 
     // ── BETTING ──
     adjustBet(d) {
-      let v = Math.round((this.betAmount+d)*10)/10;
+      let v = Math.round((this.betAmount + d) * 10) / 10;
       this.betAmount = Math.max(0.1, Math.min(this.balance, v));
     },
 
     async placeBet() {
       if (!this.canBet) return;
       
-      // Проверяем существование игры перед ставкой
       await this.ensureGameExists();
       
       this.betLoading = true; 
       this.betError = '';
+      
       try {
         await runTransaction(db, async (t) => {
-          const gRef = doc(db,'config','currentGame');
-          const uRef = doc(db,'users',this.user.id);
+          const gameRef = doc(db, 'config', 'currentGame');
+          const userRef = doc(db, 'users', this.user.id);
           
-          // Проверяем существование игры в транзакции
-          const gd = await t.get(gRef);
-          if (!gd.exists()) {
-            // Если игры нет, создаем её прямо в транзакции
-            t.set(gRef, {
-              players:[], 
-              totalBet:0, 
-              status:'waiting_for_players',
-              endsAt:null, 
-              winner:null, 
-              spinStartTime:null,
-              spinDuration:SPIN_DURATION, 
-              roundId:Date.now(), 
-              createdAt:serverTimestamp()
+          const gameSnap = await t.get(gameRef);
+          if (!gameSnap.exists()) {
+            t.set(gameRef, {
+              players: [], 
+              totalBet: 0, 
+              status: 'waiting_for_players',
+              endsAt: null, 
+              winner: null, 
+              spinStartTime: null,
+              spinDuration: SPIN_DURATION, 
+              roundId: Date.now(), 
+              createdAt: serverTimestamp()
             });
           }
           
-          const gameData = gd.exists() ? gd.data() : { players:[], totalBet:0, status:'waiting_for_players' };
-          const ud = await t.get(uRef);
+          const gameData = gameSnap.exists() ? gameSnap.data() : { 
+            players: [], 
+            totalBet: 0, 
+            status: 'waiting_for_players' 
+          };
           
-          const bal = ud.data().balance||0;
-          if (bal<this.betAmount) throw new Error('Insufficient balance');
-          if (gameData.status==='spinning') throw new Error('Round is spinning');
-          if ((gameData.players||[]).some(p=>p.userId===this.user.id)) throw new Error('Already bet');
+          const userSnap = await t.get(userRef);
+          const userBalance = userSnap.data().balance || 0;
           
-          t.update(uRef, {balance:increment(-this.betAmount)});
+          if (userBalance < this.betAmount) throw new Error('Insufficient balance');
+          if (gameData.status === 'spinning') throw new Error('Round is spinning');
+          if (gameData.players?.some(p => p.userId === this.user.id)) throw new Error('Already bet');
           
-          const players = [...(gameData.players||[]), {
-            userId:this.user.id, 
-            name:this.user.name, 
-            emoji:this.user.emoji, 
-            bet:this.betAmount
+          t.update(userRef, { balance: increment(-this.betAmount) });
+          
+          const players = [...(gameData.players || []), {
+            userId: this.user.id, 
+            name: this.user.name, 
+            emoji: this.user.emoji, 
+            bet: this.betAmount
           }];
           
           const updates = { 
             players, 
-            totalBet:(gameData.totalBet||0)+this.betAmount 
+            totalBet: (gameData.totalBet || 0) + this.betAmount 
           };
           
-          if (gameData.status==='waiting_for_players') { 
-            updates.status='waiting'; 
-            updates.endsAt=new Date(Date.now()+ROUND_TIME*1000); 
+          if (gameData.status === 'waiting_for_players') { 
+            updates.status = 'waiting'; 
+            updates.endsAt = new Date(Date.now() + ROUND_TIME * 1000); 
           }
           
-          t.update(gRef, updates);
+          t.update(gameRef, updates);
         });
+        
         this.showToast(`✅ Bet: ${this.fmt(this.betAmount)} TON`);
+        
+        // Принудительно перестраиваем блоки после ставки
+        this.$nextTick(() => {
+          this.buildRouletteBlocks();
+        });
+        
       } catch(e) {
         this.betError = e.message;
-        setTimeout(()=>{ this.betError=''; }, 3500);
-      } finally { this.betLoading = false; }
+        setTimeout(() => { this.betError = ''; }, 3500);
+      } finally { 
+        this.betLoading = false; 
+      }
     },
 
     // ── UTILS ──
     getTimerWidth() {
-      if (this.isSpinning||this.game.status==='waiting_for_players') return '0%';
-      return `${(this.timeLeft/ROUND_TIME)*100}%`;
+      if (this.isSpinning || this.game.status === 'waiting_for_players') return '0%';
+      return `${(this.timeLeft / ROUND_TIME) * 100}%`;
     },
 
-    playerChance(p) { return ((p.bet/(this.game.totalBet||1))*100).toFixed(1); },
-    fmt(n) { return (n||0).toFixed(2); },
+    playerChance(p) { 
+      return ((p.bet / (this.game.totalBet || 1)) * 100).toFixed(1); 
+    },
+    
+    fmt(n) { 
+      return (n || 0).toFixed(2); 
+    },
+    
     formatTime(ts) {
       if (!ts) return '';
-      const d = ts.toDate?ts.toDate():new Date(ts);
-      return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      const d = ts.toDate ? ts.toDate() : new Date(ts);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     },
+    
     showToast(m) {
-      this.toastMsg = m; clearTimeout(this._toastTimer);
-      this._toastTimer = setTimeout(()=>{ this.toastMsg=''; }, 3000);
+      this.toastMsg = m; 
+      clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3000);
     },
-    getTg() { return window.Telegram?.WebApp; },
+    
+    getTg() { 
+      return window.Telegram?.WebApp; 
+    },
 
     // ── MODALS ──
     openModal(t) {
       this.modal = t;
-      if (t==='deposit') {
-        this.depositStep=1; this.depositAmt=10; this.depositDone=false;
-        this.depositLoading=false; this.depositStatus='Waiting for transaction...';
-        this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0,30);
-      } else {
-        this.withdrawAmt=10; this.withdrawWallet='';
-        this.withdrawLoading=false; this.withdrawSuccess=false;
+      if (t === 'deposit') {
+        this.depositStep = 1;
+        this.depositAmt = 10;
+        this.depositDone = false;
+        this.depositLoading = false;
+        this.depositStatus = 'Waiting for transaction...';
+        this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0, 30);
+      } else if (t === 'withdraw') {
+        this.withdrawAmt = 10;
+        this.withdrawWallet = '';
+        this.withdrawLoading = false;
+        this.withdrawSuccess = false;
       }
     },
-    closeModal() { this.modal = null; },
+    
+    closeModal() { 
+      this.modal = null; 
+    },
+    
     openTonLink() {
-      const nano = Math.round(this.depositAmt*1e9);
-      window.open(`ton://transfer/${HOUSE_WALLET}?amount=${nano}&text=${encodeURIComponent(this.currentDepComment)}`,'_blank');
+      const nano = Math.round(this.depositAmt * 1e9);
+      window.open(`ton://transfer/${HOUSE_WALLET}?amount=${nano}&text=${encodeURIComponent(this.currentDepComment)}`, '_blank');
     },
+    
+    openTonkeeper() {
+      const nano = Math.round(this.depositAmt * 1e9);
+      window.open(`tonkeeper://transfer/${HOUSE_WALLET}?amount=${nano}&text=${encodeURIComponent(this.currentDepComment)}`, '_blank');
+    },
+    
     async copyText(t) {
-      try { await navigator.clipboard.writeText(t); this.showToast('Copied!'); } catch { this.showToast('Copy failed'); }
+      try { 
+        await navigator.clipboard.writeText(t); 
+        this.showToast('Copied!'); 
+      } catch { 
+        this.showToast('Copy failed'); 
+      }
     },
+    
     async submitDepositRequest() {
       this.depositLoading = true;
       try {
-        await addDoc(collection(db,'deposit_requests'), {
-          userId:this.user.id, userName:this.user.name, userHandle:this.user.handle,
-          amount:this.depositAmt, comment:this.currentDepComment, status:'pending', ts:serverTimestamp()
-        });
-        this.depositStep = 3; this.depositLoading = false;
-        this.depositStatus = 'Waiting for blockchain confirmation…';
-        setTimeout(()=>this.checkPendingDeposits(), 5000);
-      } catch(e) { this.showToast('Error: '+e.message); this.depositLoading=false; }
+        const q = query(
+          collection(db, 'deposit_requests'),
+          where('userId', '==', this.user.id),
+          where('comment', '==', this.currentDepComment),
+          limit(1)
+        );
+        
+        const existing = await getDocs(q);
+        
+        if (existing.empty) {
+          await addDoc(collection(db, 'deposit_requests'), {
+            userId: this.user.id,
+            userName: this.user.name,
+            userHandle: this.user.handle,
+            amount: this.depositAmt,
+            comment: this.currentDepComment,
+            status: 'pending',
+            ts: serverTimestamp()
+          });
+        }
+        
+        this.depositStep = 2;
+        this.depositLoading = false;
+        this.depositStatus = '⏳ Waiting for blockchain confirmation...';
+        
+        setTimeout(() => this.manualCheckDeposit(), 5000);
+        
+      } catch(e) { 
+        this.showToast('Error: ' + e.message); 
+        this.depositLoading = false;
+      }
     },
+    
     async submitWithdrawRequest() {
       if (!this.canWithdraw) return;
       this.withdrawLoading = true;
       try {
         await runTransaction(db, async (t) => {
-          const uRef = doc(db,'users',this.user.id);
+          const uRef = doc(db, 'users', this.user.id);
           const uSnap = await t.get(uRef);
           if (!uSnap.exists()) throw new Error('User not found');
-          if (uSnap.data().balance<this.withdrawAmt) throw new Error('Insufficient balance');
-          t.update(uRef, {balance:increment(-this.withdrawAmt), lockedBalance:increment(this.withdrawAmt)});
-          t.set(doc(collection(db,'withdraw_requests')), {
-            userId:this.user.id, userName:this.user.name, userHandle:this.user.handle,
-            amount:this.withdrawAmt, wallet:this.withdrawWallet.trim(), status:'pending', ts:serverTimestamp()
+          if (uSnap.data().balance < this.withdrawAmt) throw new Error('Insufficient balance');
+          t.update(uRef, { balance: increment(-this.withdrawAmt) });
+          t.set(doc(collection(db, 'withdraw_requests')), {
+            userId: this.user.id,
+            userName: this.user.name,
+            userHandle: this.user.handle,
+            amount: this.withdrawAmt,
+            wallet: this.withdrawWallet.trim(),
+            status: 'pending',
+            ts: serverTimestamp()
           });
         });
         this.withdrawSuccess = true;
-        setTimeout(()=>this.closeModal(), 2000);
-      } catch(e) { this.showToast('Error: '+e.message); } finally { this.withdrawLoading=false; }
+        setTimeout(() => this.closeModal(), 2000);
+      } catch(e) { 
+        this.showToast('Error: ' + e.message); 
+      } finally { 
+        this.withdrawLoading = false; 
+      }
     },
 
     // ── PROFILE ──
     async loadHistory() {
       try {
-        const q = query(collection(db,'users',this.user.id,'history'),orderBy('ts','desc'),limit(20));
+        const q = query(
+          collection(db, 'users', this.user.id, 'history'), 
+          orderBy('ts', 'desc'), 
+          limit(20)
+        );
         const s = await getDocs(q);
-        this.history = s.docs.map(d=>({id:d.id,...d.data(),ts:d.data().ts?.toMillis()||Date.now()}));
-      } catch(e) { console.warn(e); }
+        this.history = s.docs.map(d => ({
+          id: d.id, 
+          ...d.data(), 
+          ts: d.data().ts?.toMillis?.() || Date.now()
+        }));
+      } catch(e) { 
+        console.warn(e); 
+      }
     },
+    
     async copyRef() {
-      try { await navigator.clipboard.writeText(this.referralLink); this.copied=true; setTimeout(()=>{this.copied=false;},2000); this.showToast('Copied!'); } catch {}
+      try { 
+        await navigator.clipboard.writeText(this.referralLink); 
+        this.copied = true; 
+        setTimeout(() => { this.copied = false; }, 2000); 
+        this.showToast('Copied!'); 
+      } catch {}
     },
 
     // ── ADMIN ──
     switchAdmin() { 
-      this.tab='admin'; 
+      this.tab = 'admin'; 
       this.subscribeAdmin(); 
     },
     
     async subscribeAdmin() {
-      Object.values(this._unsubAdmin).forEach(u=>u?.());
+      Object.values(this._unsubAdmin).forEach(u => u?.());
+      
       try {
-        const uSnap = await getDocs(query(collection(db,'users'),orderBy('balance','desc'),limit(50)));
-        this.adminData.users = uSnap.docs.map(d=>({id:d.id,...d.data()}));
+        const uSnap = await getDocs(query(
+          collection(db, 'users'), 
+          orderBy('balance', 'desc'), 
+          limit(50)
+        ));
+        
+        this.adminData.users = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
         this.adminData.totalUsers = this.adminData.users.length;
 
-        const gSnap = await getDocs(collection(db,'games'));
-        let vol=0;
-        gSnap.forEach(d=>{vol+=d.data().totalBet||0;});
+        const gSnap = await getDocs(collection(db, 'games'));
+        let vol = 0;
+        gSnap.forEach(d => { vol += d.data().totalBet || 0; });
         this.adminData.totalGames = gSnap.size;
         this.adminData.totalVolume = vol;
         this.adminData.commissionEarned = vol * HOUSE_FEE;
 
-        let hb=0;
-        let adminBal=0;
-        uSnap.docs.forEach(d=>{
-          const x=d.data();
-          hb+=(x.balance||0)+(x.lockedBalance||0);
+        let hb = 0;
+        let adminBal = 0;
+        uSnap.docs.forEach(d => {
+          const x = d.data();
+          hb += (x.balance || 0) + (x.lockedBalance || 0);
           if (x.handle === ADMIN_HANDLE) adminBal = x.balance || 0;
         });
         this.adminData.houseBalance = hb;
         this.adminData.adminBalance = adminBal;
 
-      } catch(e){console.error(e);}
+      } catch(e) {
+        console.error(e);
+      }
       
       this._unsubAdmin.w = onSnapshot(
-        query(collection(db,'withdraw_requests'), where('status','==','pending'), orderBy('ts','desc')), 
-        s=>{
-          this.adminData.withdraws = s.docs.map(d=>({
-            id:d.id,
+        query(
+          collection(db, 'withdraw_requests'), 
+          where('status', '==', 'pending'), 
+          orderBy('ts', 'desc')
+        ), 
+        s => {
+          this.adminData.withdraws = s.docs.map(d => ({
+            id: d.id,
             ...d.data(),
-            processing:false,
-            ts:d.data().ts?.toMillis()||Date.now()
+            processing: false,
+            ts: d.data().ts?.toMillis?.() || Date.now()
           }));
       });
       
       this._unsubAdmin.d = onSnapshot(
-        query(collection(db,'deposit_requests'), orderBy('ts','desc'), limit(20)), 
-        s=>{
-          this.adminData.deposits = s.docs.map(d=>({
-            id:d.id,
+        query(
+          collection(db, 'deposit_requests'), 
+          orderBy('ts', 'desc'), 
+          limit(20)
+        ), 
+        s => {
+          this.adminData.deposits = s.docs.map(d => ({
+            id: d.id,
             ...d.data(),
-            ts:d.data().ts?.toMillis()||Date.now()
+            ts: d.data().ts?.toMillis?.() || Date.now()
           }));
       });
     },
     
     async approveWithdraw(r) {
-      r.processing=true;
+      r.processing = true;
       try {
-        const b=writeBatch(db);
-        b.update(doc(db,'withdraw_requests',r.id),{
-          status:'approved',
-          approvedAt:serverTimestamp(),
-          processedBy:this.user.id
+        const b = writeBatch(db);
+        b.update(doc(db, 'withdraw_requests', r.id), {
+          status: 'approved',
+          approvedAt: serverTimestamp(),
+          processedBy: this.user.id
         });
-        b.update(doc(db,'users',r.userId),{lockedBalance:increment(-r.amount)});
+        b.update(doc(db, 'users', r.userId), { 
+          balance: increment(-r.amount) 
+        });
         await b.commit();
-        await addDoc(collection(db,'users',r.userId,'history'),{
-          type:'withdraw',
-          amount:-r.amount,
-          ts:serverTimestamp()
+        
+        await addDoc(collection(db, 'users', r.userId, 'history'), {
+          type: 'withdraw',
+          amount: -r.amount,
+          ts: serverTimestamp()
         });
+        
         this.showToast(`✓ Approved ${r.amount} TON for ${r.userName}`);
-      } catch(e){this.showToast('Error: '+e.message);} finally{r.processing=false;}
+      } catch(e) {
+        this.showToast('Error: ' + e.message);
+      } finally {
+        r.processing = false;
+      }
     },
     
     async rejectWithdraw(r) {
-      r.processing=true;
+      r.processing = true;
       try {
-        const b=writeBatch(db);
-        b.update(doc(db,'users',r.userId),{
-          balance:increment(r.amount),
-          lockedBalance:increment(-r.amount)
+        const b = writeBatch(db);
+        b.update(doc(db, 'users', r.userId), {
+          balance: increment(r.amount)
         });
-        b.update(doc(db,'withdraw_requests',r.id),{
-          status:'rejected',
-          rejectedAt:serverTimestamp()
+        b.update(doc(db, 'withdraw_requests', r.id), {
+          status: 'rejected',
+          rejectedAt: serverTimestamp()
         });
         await b.commit();
         this.showToast('Rejected, funds returned');
-      } catch(e){this.showToast('Error: '+e.message);} finally{r.processing=false;}
+      } catch(e) {
+        this.showToast('Error: ' + e.message);
+      } finally {
+        r.processing = false;
+      }
     },
     
     async adminAddBalance(u, a) {
       try { 
-        await updateDoc(doc(db,'users',u.id),{balance:increment(a)}); 
+        await updateDoc(doc(db, 'users', u.id), { balance: increment(a) }); 
         this.showToast(`+${a} TON → ${u.name}`); 
-      } catch(e){this.showToast('Error: '+e.message);}
+      } catch(e) {
+        this.showToast('Error: ' + e.message);
+      }
     },
     
     adminSetBalance(u) {
-      const v=prompt(`Balance for ${u.name} (now: ${u.balance}):`);
-      if (!v||isNaN(parseFloat(v))) return;
-      updateDoc(doc(db,'users',u.id),{balance:parseFloat(v)})
-        .then(()=>this.showToast('Done'))
-        .catch(e=>this.showToast('Error: '+e.message));
+      const v = prompt(`Balance for ${u.name} (now: ${u.balance}):`);
+      if (!v || isNaN(parseFloat(v))) return;
+      updateDoc(doc(db, 'users', u.id), { balance: parseFloat(v) })
+        .then(() => this.showToast('Done'))
+        .catch(e => this.showToast('Error: ' + e.message));
     },
   },
 };
