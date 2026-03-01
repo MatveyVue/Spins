@@ -1,14 +1,26 @@
 <template>
-  <div class="app">
+  <div class="app" :class="{ 'app--dark': true }">
 
-    <!-- SPLASH (for users not in Telegram or for local testing) -->
+    <!-- SPLASH -->
     <div v-if="!user" class="splash">
-      <div class="splash-logo">
-        <span class="splash-icon">◎</span>
-        <span class="splash-title">TON Roulette</span>
+      <div class="splash-bg">
+        <div class="splash-orb splash-orb--1"></div>
+        <div class="splash-orb splash-orb--2"></div>
+        <div class="splash-grid"></div>
       </div>
-      <p class="splash-sub">Multiplayer · Fair · Instant</p>
-      <button class="splash-btn" @click="quickLogin">Start Playing</button>
+      <div class="splash-content">
+        <div class="splash-logo">
+          <div class="logo-icon">
+            <span class="logo-diamond">◈</span>
+          </div>
+          <h1 class="splash-title">TON<br><span class="splash-title--accent">ROULETTE</span></h1>
+        </div>
+        <p class="splash-sub">Stake · Spin · Win</p>
+        <button class="splash-btn" @click="quickLogin">
+          <span class="btn-shine"></span>
+          Enter Game
+        </button>
+      </div>
     </div>
 
     <!-- MAIN APP -->
@@ -24,25 +36,37 @@
           </div>
         </div>
         <div class="hdr-balance" @click="openModal('deposit')">
-          <span class="hdr-bal-num">{{ fmt(balance) }}</span>
-          <span class="hdr-bal-cur">TON</span>
+          <div class="hdr-bal-inner">
+            <span class="hdr-bal-num">{{ fmt(balance) }}</span>
+            <span class="hdr-bal-cur">TON</span>
+          </div>
+          <div class="hdr-bal-add">+</div>
         </div>
       </header>
 
       <!-- NAVIGATION -->
       <nav class="nav">
-        <button :class="['nav-btn', { active: tab === 'game' }]" @click="tab = 'game'">Game</button>
-        <button :class="['nav-btn', { active: tab === 'profile' }]" @click="tab = 'profile'">Profile</button>
-        <button v-if="isAdmin" :class="['nav-btn', { active: tab === 'admin' }]" @click="switchAdmin">Admin</button>
+        <button :class="['nav-btn', { active: tab === 'game' }]" @click="tab = 'game'">
+          <span class="nav-icon">◉</span> Game
+        </button>
+        <button :class="['nav-btn', { active: tab === 'profile' }]" @click="tab = 'profile'">
+          <span class="nav-icon">◎</span> Profile
+        </button>
+        <button v-if="isAdmin" :class="['nav-btn', { active: tab === 'admin' }]" @click="switchAdmin">
+          <span class="nav-icon">⬡</span> Admin
+        </button>
+        <div class="nav-indicator" :style="navIndicatorStyle"></div>
       </nav>
+
+      <!-- CONNECTION BANNER -->
+      <div v-if="!isConnected" class="conn-banner">
+        <div class="conn-pulse"></div> Reconnecting…
+      </div>
 
       <!-- ═══ GAME TAB ═══ -->
       <div v-if="tab === 'game'" class="tab game-tab">
 
-        <div v-if="!isConnected" class="conn-banner">
-          <span class="conn-dot"></span> Connecting…
-        </div>
-
+        <!-- STATS ROW -->
         <div class="stats-row">
           <div class="stat-box">
             <span :class="['stat-val', { danger: timeLeft <= 5 && !isSpinning }]">
@@ -50,9 +74,9 @@
             </span>
             <span class="stat-lbl">Timer</span>
           </div>
-          <div class="stat-box">
+          <div class="stat-box stat-box--main">
             <span class="stat-val gold">{{ fmt(game.totalBet) }}</span>
-            <span class="stat-lbl">Prize Pool</span>
+            <span class="stat-lbl">Prize Pool TON</span>
           </div>
           <div class="stat-box">
             <span class="stat-val">{{ game.players.length }}</span>
@@ -60,26 +84,49 @@
           </div>
         </div>
 
+        <!-- TIMER BAR -->
         <div class="timer-track">
-          <div
-            class="timer-fill"
+          <div class="timer-fill"
             :class="{ danger: timeLeft <= 5 && !isSpinning }"
-            :style="{
-              width: getTimerWidth(),
-              transition: isSpinning ? 'none' : 'width 0.5s linear, background 0.3s'
-            }"
-          ></div>
-        </div>
-
-        <div class="wheel-section">
-          <div class="wheel-wrap">
-            <canvas ref="wheelCanvas" width="280" height="280" class="wheel-canvas"></canvas>
-            <div class="wheel-pointer"></div>
-            <div class="wheel-center">◎</div>
+            :style="{ width: getTimerWidth(), transition: isSpinning ? 'none' : 'width 0.5s linear, background 0.3s' }">
           </div>
         </div>
 
+        <!-- BLOCK ROULETTE STRIP -->
+        <div class="roulette-section">
+          <div class="roulette-label" v-if="game.status === 'waiting_for_players'">Waiting for players…</div>
+          <div class="roulette-label" v-else-if="isSpinning">
+            <span class="spinning-text">Spinning…</span>
+          </div>
+          <div class="roulette-label" v-else>Round #{{ game.roundId ? String(game.roundId).slice(-4) : '—' }}</div>
+
+          <div class="roulette-viewport">
+            <div class="roulette-pointer">
+              <div class="pointer-top">▼</div>
+              <div class="pointer-line"></div>
+            </div>
+
+            <div class="roulette-track" ref="rouletteTrack"
+              :style="{ transform: `translateX(${stripOffset}px)`, transition: isSpinning ? `transform ${SPIN_DURATION}ms cubic-bezier(0.17, 0.67, 0.12, 1.0)` : 'none' }">
+              <template v-for="(block, i) in rouletteBlocks" :key="i">
+                <div class="roulette-block"
+                  :class="{ 'roulette-block--winner': isSpinning && block.isWinner && spinProgress > 0.9 }"
+                  :style="{ background: block.color, width: block.width + 'px' }">
+                  <span class="block-emoji">{{ block.emoji }}</span>
+                  <span class="block-name">{{ block.shortName }}</span>
+                  <span class="block-bet">{{ fmt(block.bet) }}</span>
+                </div>
+              </template>
+            </div>
+
+            <div class="roulette-fade roulette-fade--left"></div>
+            <div class="roulette-fade roulette-fade--right"></div>
+          </div>
+        </div>
+
+        <!-- BET CARD -->
         <div class="bet-card">
+          <div class="bet-card-title">Place Your Bet</div>
           <div class="bet-row">
             <button class="adj-btn" @click="adjustBet(-0.5)" :disabled="isSpinning || userAlreadyBet">−</button>
             <div class="bet-field">
@@ -94,36 +141,42 @@
             <button v-for="a in [0.5, 1, 5, 10]" :key="a" class="quick-btn"
               :disabled="isSpinning || userAlreadyBet || a > balance"
               @click="betAmount = a">{{ a }}</button>
+            <button class="quick-btn quick-btn--max"
+              :disabled="isSpinning || userAlreadyBet || balance <= 0"
+              @click="betAmount = Math.floor(balance * 10) / 10">MAX</button>
           </div>
 
           <button class="place-btn"
-            :class="{ active: canBet, done: userAlreadyBet }"
+            :class="{ 'place-btn--active': canBet, 'place-btn--done': userAlreadyBet }"
             :disabled="(!canBet && !userAlreadyBet) || betLoading"
             @click="placeBet">
+            <span class="place-btn-shine"></span>
             <span v-if="betLoading">Placing…</span>
             <span v-else-if="isSpinning">Spinning…</span>
-            <span v-else-if="userAlreadyBet">Bet placed ✓</span>
+            <span v-else-if="userAlreadyBet">✓ Bet Placed — Good luck!</span>
             <span v-else>Place Bet</span>
           </button>
-          <div v-if="betError" class="bet-error">{{ betError }}</div>
+          <div v-if="betError" class="bet-error">⚠ {{ betError }}</div>
         </div>
 
+        <!-- PLAYERS LIST -->
         <div class="players-card">
           <div class="players-head">
-            <span class="card-title">Players in this round</span>
-            <span class="players-count">{{ game.players.length }}</span>
+            <span class="card-title">This Round</span>
+            <span class="players-badge">{{ game.players.length }}</span>
           </div>
-          <div v-if="game.status === 'waiting_for_players'" class="empty-msg">Be the first to join and start the round!</div>
-          <div v-else-if="!game.players.length" class="empty-msg">Waiting for players...</div>
+          <div v-if="game.status === 'waiting_for_players'" class="empty-msg">
+            <div class="empty-icon">🎰</div>
+            Be the first to start the round!
+          </div>
+          <div v-else-if="!game.players.length" class="empty-msg">Waiting…</div>
           <div v-else class="players-list">
-            <div v-for="(p, i) in game.players" :key="p.userId + i" class="player-row"
-              :style="{ borderLeftColor: playerColor(p.userId) }">
-              <div class="pr-left">
-                <span class="pr-emoji">{{ p.emoji }}</span>
-                <span class="pr-name" :class="{ 'pr-me': p.userId === user.id }">
-                  {{ p.name }}<span v-if="p.userId === user.id" class="pr-you"> you</span>
-                </span>
-              </div>
+            <div v-for="(p, i) in game.players" :key="p.userId + i" class="player-row">
+              <div class="player-color" :style="{ background: COLORS[i % COLORS.length] }"></div>
+              <span class="pr-emoji">{{ p.emoji }}</span>
+              <span class="pr-name" :class="{ 'pr-me': p.userId === user.id }">
+                {{ p.name }}<span v-if="p.userId === user.id" class="pr-you"> YOU</span>
+              </span>
               <div class="pr-right">
                 <span class="pr-chance">{{ playerChance(p) }}%</span>
                 <span class="pr-bet">{{ fmt(p.bet) }} TON</span>
@@ -139,16 +192,43 @@
           <div class="profile-avatar">{{ user.emoji }}</div>
           <div class="profile-name">{{ user.name }}</div>
           <div class="profile-handle">@{{ user.handle }}</div>
+          <div class="profile-balance">
+            <span class="profile-bal-num">{{ fmt(balance) }}</span>
+            <span class="profile-bal-cur">TON</span>
+          </div>
         </div>
+
         <div class="pstats">
-          <div class="pstat"><span class="pstat-val">{{ stats.played }}</span><span class="pstat-lbl">Played</span></div>
-          <div class="pstat"><span class="pstat-val">{{ stats.won }}</span><span class="pstat-lbl">Wins</span></div>
-          <div class="pstat"><span class="pstat-val gold">{{ fmt(stats.earned) }}</span><span class="pstat-lbl">Earned</span></div>
-          <div class="pstat"><span class="pstat-val">{{ winRate }}%</span><span class="pstat-lbl">Rate</span></div>
+          <div class="pstat">
+            <span class="pstat-val">{{ stats.played }}</span>
+            <span class="pstat-lbl">Played</span>
+          </div>
+          <div class="pstat">
+            <span class="pstat-val">{{ stats.won }}</span>
+            <span class="pstat-lbl">Wins</span>
+          </div>
+          <div class="pstat">
+            <span class="pstat-val gold">{{ fmt(stats.earned) }}</span>
+            <span class="pstat-lbl">Earned</span>
+          </div>
+          <div class="pstat">
+            <span class="pstat-val">{{ winRate }}%</span>
+            <span class="pstat-lbl">Win Rate</span>
+          </div>
         </div>
+
+        <div class="fin-row">
+          <button class="fin-btn fin-btn--deposit" @click="openModal('deposit')">
+            <span class="fin-icon">↓</span> Deposit
+          </button>
+          <button class="fin-btn fin-btn--withdraw" @click="openModal('withdraw')" :disabled="balance < 0.1">
+            <span class="fin-icon">↑</span> Withdraw
+          </button>
+        </div>
+
         <div class="ref-card">
           <div class="ref-head">
-            <span class="card-title">Referral</span>
+            <span class="card-title">Referral Link</span>
             <span class="ref-bonus">+5% from friends</span>
           </div>
           <div class="ref-row">
@@ -156,20 +236,17 @@
             <button class="copy-btn" @click="copyRef">{{ copied ? '✓' : '⎘' }}</button>
           </div>
         </div>
-        <div class="fin-row">
-          <button class="fin-btn green" @click="openModal('deposit')">+ Deposit</button>
-          <button class="fin-btn red" @click="openModal('withdraw')" :disabled="balance < 0.1">Withdraw</button>
-        </div>
+
         <div v-if="history.length" class="history-card">
-          <div class="card-title" style="margin-bottom:12px">History</div>
+          <div class="card-title" style="margin-bottom:14px">Recent Games</div>
           <div class="history-list">
             <div v-for="(h, i) in history" :key="i" class="history-row">
               <div class="hist-left">
-                <span :class="['hist-result', h.won ? 'win' : 'loss']">{{ h.won ? 'WIN' : 'LOSS' }}</span>
+                <span :class="['hist-pill', h.won ? 'win' : 'loss']">{{ h.won ? 'WIN' : 'LOSS' }}</span>
                 <span class="hist-time">{{ formatTime(h.ts) }}</span>
               </div>
               <span class="hist-amount" :class="h.won ? 'win' : 'loss'">
-                {{ h.won ? '+' : '-' }}{{ fmt(h.amount) }} TON
+                {{ h.won ? '+' : '−' }}{{ fmt(h.amount) }} TON
               </span>
             </div>
           </div>
@@ -186,10 +263,10 @@
         </div>
         <div class="admin-actions">
           <button class="admin-action-btn" @click="triggerRoundEnd(true)">Force End Round</button>
-          <button class="admin-action-btn danger-btn" @click="createFirestoreRound">Reset Round</button>
+          <button class="admin-action-btn admin-action-btn--danger" @click="createFirestoreRound">Reset Round</button>
         </div>
-        
-        <!-- Deposit Requests (for info only, auto-processed) -->
+
+        <!-- Deposits -->
         <div class="admin-section">
           <div class="section-head">
             <span class="card-title">📥 Recent Deposits</span>
@@ -198,14 +275,14 @@
           <div v-if="!adminData.deposits.length" class="empty-msg">No recent deposits</div>
           <div v-for="r in adminData.deposits.slice(0,5)" :key="r.id" class="req-row">
             <div class="req-info">
-              <span class="req-user">{{ r.userName }} <span class="req-uid">#{{ (r.userId||'').slice(-4) }}</span></span>
+              <span class="req-user">{{ r.userName }}</span>
               <span class="req-meta">{{ fmt(r.amount) }} TON · {{ formatTime(r.ts) }}</span>
               <span :class="['req-status', r.status]">{{ r.status }}</span>
             </div>
           </div>
         </div>
 
-        <!-- Withdrawal Requests (manual approval) -->
+        <!-- Withdrawals -->
         <div class="admin-section">
           <div class="section-head">
             <span class="card-title">💸 Pending Withdrawals</span>
@@ -214,9 +291,9 @@
           <div v-if="!adminData.withdraws.length" class="empty-msg">No pending withdrawals</div>
           <div v-for="r in adminData.withdraws" :key="r.id" class="req-row">
             <div class="req-info">
-              <span class="req-user">{{ r.userName }} <span class="req-uid">#{{ (r.userId||'').slice(-4) }}</span></span>
+              <span class="req-user">{{ r.userName }}</span>
               <span class="req-meta">{{ fmt(r.amount) }} TON · {{ formatTime(r.ts) }}</span>
-              <span class="req-wallet">→ {{ r.wallet ? r.wallet.slice(0,14)+'…' : 'no wallet' }}</span>
+              <span class="req-wallet">→ {{ r.wallet ? r.wallet.slice(0,14) + '…' : 'no wallet' }}</span>
             </div>
             <div class="req-actions">
               <button class="req-approve" @click="approveWithdraw(r)" :disabled="r.processing">✓ Paid</button>
@@ -225,10 +302,9 @@
           </div>
         </div>
 
-        <!-- Users List -->
+        <!-- Users -->
         <div class="admin-section">
           <div class="card-title" style="margin-bottom:12px">👥 Users</div>
-          <div v-if="!adminData.users.length" class="empty-msg">No users yet</div>
           <div v-for="u in adminData.users.slice(0,10)" :key="u.id" class="user-row">
             <div class="user-info">
               <span class="user-emoji">{{ u.emoji }}</span>
@@ -239,7 +315,7 @@
             </div>
             <div class="user-actions">
               <button class="small-btn" @click="adminAddBalance(u, 10)">+10</button>
-              <button class="small-btn danger-sm" @click="adminSetBalance(u)">Set</button>
+              <button class="small-btn small-btn--danger" @click="adminSetBalance(u)">Set</button>
             </div>
           </div>
         </div>
@@ -247,27 +323,30 @@
     </div>
 
     <!-- WINNER OVERLAY -->
-    <transition name="fade">
-      <div v-if="winner" class="overlay" @click="dismissWinner">
+    <transition name="winner-anim">
+      <div v-if="winnerOverlay" class="overlay" @click="dismissWinner">
         <div class="winner-card" @click.stop>
+          <div class="winner-bg-glow"></div>
           <div class="wc-trophy">🏆</div>
-          <div class="wc-label">Winner</div>
-          <div class="wc-name">{{ winner.name }}</div>
-          <div class="wc-prize">+{{ fmt(winner.prize) }} TON</div>
-          <div v-if="winner.isMe" class="wc-you">That's you! 🎉</div>
-          <div v-else-if="winner.myLoss > 0" class="wc-loss">−{{ fmt(winner.myLoss) }} TON</div>
-          <button class="wc-close" @click="dismissWinner">New Round</button>
+          <div class="wc-label">Winner!</div>
+          <div class="wc-name">{{ winnerOverlay.name }}</div>
+          <div class="wc-prize">+{{ fmt(winnerOverlay.prize) }} TON</div>
+          <div v-if="winnerOverlay.isMe" class="wc-you">🎉 That's you!</div>
+          <div v-else-if="winnerOverlay.myLoss > 0" class="wc-loss">−{{ fmt(winnerOverlay.myLoss) }} TON</div>
+          <button class="wc-close" @click="dismissWinner">New Round →</button>
         </div>
       </div>
     </transition>
 
-    <!-- DEPOSIT MODAL - AUTOMATIC VERSION -->
-    <transition name="fade">
+    <!-- DEPOSIT MODAL -->
+    <transition name="modal-anim">
       <div v-if="modal === 'deposit'" class="overlay" @click.self="closeModal">
         <div class="modal-card">
-          <div class="modal-title">💰 Deposit TON</div>
-          
-          <!-- Step 1: Amount -->
+          <div class="modal-title">
+            <span class="modal-icon">💎</span> Deposit TON
+          </div>
+
+          <!-- Step 1 -->
           <div v-if="depositStep === 1">
             <div class="preset-row">
               <button v-for="a in [5,10,25,50,100]" :key="a"
@@ -275,7 +354,7 @@
                 @click="depositAmt = a">{{ a }}</button>
             </div>
             <div class="modal-field">
-              <input type="number" v-model.number="depositAmt" min="0.1" step="0.1" 
+              <input type="number" v-model.number="depositAmt" min="0.1" step="0.1"
                 class="modal-input" placeholder="Amount" />
               <span class="modal-cur">TON</span>
             </div>
@@ -285,7 +364,7 @@
             </div>
           </div>
 
-          <!-- Step 2: Send Instructions -->
+          <!-- Step 2 -->
           <div v-if="depositStep === 2">
             <div class="deposit-info">
               <div class="dep-row">
@@ -300,50 +379,44 @@
                 </div>
               </div>
               <div class="dep-row">
-                <span class="dep-lbl">Comment (REQUIRED!)</span>
+                <span class="dep-lbl">Comment <strong class="red">(REQUIRED)</strong></span>
                 <div class="dep-wallet-row highlight">
                   <span class="dep-wallet gold">{{ currentDepComment }}</span>
                   <button class="copy-small gold" @click="copyText(currentDepComment)">📋</button>
                 </div>
               </div>
               <div class="dep-note">
-                ⚠️ Include this exact comment! Without it, deposit won't be credited automatically.
+                ⚠️ The comment must be sent exactly as shown. Without it, the deposit won't be credited.
               </div>
             </div>
-
             <button class="ton-connect-btn" @click="openTonLink">
               <span>💎</span> Open in TON Wallet
             </button>
-
             <div class="modal-btns">
               <button class="modal-cancel" @click="depositStep = 1">← Back</button>
               <button class="modal-confirm" @click="submitDepositRequest">I've Sent →</button>
             </div>
           </div>
 
-          <!-- Step 3: Waiting for Confirmation (AUTOMATIC) -->
+          <!-- Step 3 -->
           <div v-if="depositStep === 3">
             <div class="deposit-status">
               <div v-if="!depositDone" class="waiting-message">
                 <div class="spinner-large"></div>
                 <p class="status-text">{{ depositStatus }}</p>
-                <p class="status-hint">
-                  Your balance will be updated automatically when the transaction is detected on the blockchain.
-                  This usually takes 1-2 minutes.
-                </p>
+                <p class="status-hint">Balance updates automatically when the blockchain confirms your transaction. Usually 1–2 minutes.</p>
               </div>
               <div v-if="depositDone" class="success-message">
                 <div class="success-icon">✅</div>
-                <p class="success-text">Transaction confirmed!</p>
+                <p class="success-text">Confirmed!</p>
                 <p class="success-sub">+{{ fmt(depositAmt) }} TON added to your balance</p>
               </div>
             </div>
-            
             <div class="modal-btns" v-if="!depositDone">
-              <button class="modal-cancel" @click="closeModal">Close (will continue checking)</button>
+              <button class="modal-cancel" @click="closeModal">Close (checking continues)</button>
             </div>
             <div class="modal-btns" v-if="depositDone">
-              <button class="modal-confirm" @click="closeModal" style="width:100%">Done</button>
+              <button class="modal-confirm" style="width:100%" @click="closeModal">Done ✓</button>
             </div>
           </div>
         </div>
@@ -351,15 +424,15 @@
     </transition>
 
     <!-- WITHDRAW MODAL -->
-    <transition name="fade">
+    <transition name="modal-anim">
       <div v-if="modal === 'withdraw'" class="overlay" @click.self="closeModal">
         <div class="modal-card">
-          <div class="modal-title">💸 Withdraw TON</div>
-          
+          <div class="modal-title">
+            <span class="modal-icon">💸</span> Withdraw TON
+          </div>
           <div class="modal-avail">
             Available: <strong class="gold">{{ fmt(balance) }} TON</strong>
           </div>
-          
           <div class="preset-row">
             <button v-for="a in [5,10,25,50]" :key="a"
               :class="['preset-btn', { active: withdrawAmt === a }]"
@@ -368,53 +441,39 @@
             <button :class="['preset-btn', { active: withdrawAmt === balance }]"
               @click="withdrawAmt = balance">MAX</button>
           </div>
-          
           <div class="modal-field">
-            <input type="number" v-model.number="withdrawAmt" min="0.1" :max="balance" step="0.1" 
+            <input type="number" v-model.number="withdrawAmt" min="0.1" :max="balance" step="0.1"
               class="modal-input" />
             <span class="modal-cur">TON</span>
           </div>
-          
           <div class="modal-field">
             <input type="text" v-model="withdrawWallet" class="modal-input"
-              placeholder="Your TON wallet address (EQ... or UQ...)" />
+              placeholder="TON wallet (EQ… or UQ…)" />
           </div>
-
           <div v-if="withdrawWallet && !isValidTonAddress" class="error-message">
-            Invalid TON address format
+            ⚠ Invalid TON address format
           </div>
-
-          <div class="dep-note">
-            ⏱️ Withdrawals are processed manually by admin within 24 hours.
-          </div>
-
+          <div class="dep-note">⏱ Manually processed within 24h.</div>
           <div v-if="withdrawLoading" class="loading-row">
-            <span class="spinner-small"></span> Processing...
+            <span class="spinner-small"></span> Processing…
           </div>
-          
-          <div v-if="withdrawSuccess" class="success-msg">
-            ✓ Withdrawal request submitted!
-          </div>
-
+          <div v-if="withdrawSuccess" class="success-msg">✓ Request submitted!</div>
           <div class="modal-btns" v-if="!withdrawSuccess">
             <button class="modal-cancel" @click="closeModal">Cancel</button>
-            <button class="modal-confirm" @click="submitWithdrawRequest" 
+            <button class="modal-confirm" @click="submitWithdrawRequest"
               :disabled="!canWithdraw || withdrawLoading">
               Request Withdrawal
             </button>
           </div>
-          <button v-if="withdrawSuccess" class="modal-confirm" style="width:100%" @click="closeModal">
-            Done
-          </button>
+          <button v-if="withdrawSuccess" class="modal-confirm" style="width:100%" @click="closeModal">Done ✓</button>
         </div>
       </div>
     </transition>
 
-    <!-- Toast Notifications -->
+    <!-- TOAST -->
     <transition name="toast-anim">
       <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
     </transition>
-
   </div>
 </template>
 
@@ -426,1403 +485,1435 @@ import {
   where, setDoc, increment, writeBatch, runTransaction
 } from 'firebase/firestore';
 
-// ==================== CONSTANTS ====================
-const EMOJIS = ['😎','🦊','🐸','🐼','🦁','🐨','🐯','🦅','🐺','🦝','🐻','🦋'];
-const COLORS = ['#e05252','#52a0e0','#52c77a','#e0a052','#9b52e0','#52d4e0','#e0527a','#7ae052'];
+const EMOJIS = ['😎','🦊','🐸','🐼','🦁','🐨','🐯','🦅','🐺','🦝','🐻','🦋','🐙','🦄','🐲'];
+const COLORS = ['#ff4757','#3742fa','#2ed573','#ffa502','#a55eea','#1e90ff','#ff6b81','#eccc68','#ff6348','#70a1ff'];
 const ROUND_TIME = 30;
 const HOUSE_FEE = 0.05;
 const MIN_PLAYERS = 2;
 const HOUSE_WALLET = '0QBbz6lrdck00jKezlUKQAn1QzV1uOB1uUs5caKFv-m1zxCM';
-const SPIN_DURATION = 4000; // Уменьшил до 4 секунд для более быстрой анимации
+const SPIN_DURATION = 5000;
+const TRACK_REPEAT = 4;
+const REFERRAL_BONUS = 0.2;
+const ADMIN_HANDLE = 'whsxg';
 
-// TonCenter API
-const TONCENTER_API_KEY = '62baa2e429900335d7e5367e89c7e75c7752c7c83d5fd8a0b3bcb568bd48d1ee';
-const TONCENTER_API_URL = 'https://testnet.toncenter.com/api/v2';
-
-// ==================== HELPERS ====================
 function randInt(n) { return Math.floor(Math.random() * n); }
-
 function weightedRandom(players) {
   const total = players.reduce((s, p) => s + p.bet, 0);
   let r = Math.random() * total;
-  for (const p of players) { 
-    r -= p.bet; 
-    if (r <= 0) return p; 
-  }
+  for (const p of players) { r -= p.bet; if (r <= 0) return p; }
   return players[players.length - 1];
 }
-
-function isValidTonAddress(address) {
-  if (!address) return false;
-  address = address.trim();
-  return address.startsWith('EQ') || address.startsWith('UQ') || address.startsWith('0:');
+function isValidAddr(a) {
+  if (!a) return false;
+  a = a.trim();
+  return a.startsWith('EQ') || a.startsWith('UQ') || a.startsWith('0:');
 }
 
 export default {
   name: 'App',
-
   data() {
     return {
-      // Constants
-      ROUND_TIME,
-      HOUSE_WALLET,
-      SPIN_DURATION,
-      
-      // User & Connection
-      user: null,
-      tab: 'game',
-      balance: 0,
-      isConnected: false,
-      connectionError: false,
-
-      // Betting
-      betAmount: 1,
-      betLoading: false,
-      betError: '',
-      
-      // Game State
-      game: { 
-        id: null, 
-        players: [], 
-        totalBet: 0, 
-        status: 'waiting_for_players', 
-        endsAt: null,
-        spinStartTime: null,
-        spinDuration: SPIN_DURATION,
-        winner: null,
-        roundId: null
+      HOUSE_WALLET, SPIN_DURATION, ROUND_TIME,
+      COLORS,
+      user: null, tab: 'game', balance: 0,
+      isConnected: false, connectionError: false,
+      betAmount: 1, betLoading: false, betError: '',
+      game: {
+        id: null, players: [], totalBet: 0,
+        status: 'waiting_for_players', endsAt: null,
+        spinStartTime: null, spinDuration: SPIN_DURATION,
+        winner: null, roundId: null
       },
-
-      // Spin Animation
-      isSpinning: false,
-      timeLeft: ROUND_TIME,
-      timerHandle: null,
-      spinAngle: 0,
-      animFrame: null,
-      winnerOverlay: null,
+      isSpinning: false, timeLeft: ROUND_TIME,
+      timerHandle: null, winnerOverlay: null,
       spinProgress: 0,
-      targetAngle: 0,
-      animationStartTime: 0,
-      lastDrawTime: 0,
-      rafActive: false,
-
-      // Firebase Listeners
-      _unsubGame: null,
-      _unsubUser: null,
-      _unsubAdmin: {},
-
-      // Profile Stats
-      stats: { played: 0, won: 0, earned: 0 },
-      history: [],
-      copied: false,
-
-      // Modal Control
+      rouletteBlocks: [],
+      stripOffset: 0,
+      _unsubGame: null, _unsubUser: null, _unsubAdmin: {},
+      stats: { played: 0, won: 0, earned: 0, referrals: 0, referralEarned: 0 },
+      history: [], copied: false,
       modal: null,
-      
-      // Deposit
-      depositStep: 1,
-      depositAmt: 10,
-      depositLoading: false,
-      depositDone: false,
-      currentDepComment: '',
-      depositStatus: 'Waiting for transaction...',
-      
-      // Withdraw
-      withdrawAmt: 10,
-      withdrawWallet: '',
-      withdrawLoading: false,
-      withdrawSuccess: false,
-
-      // Admin Data
+      depositStep: 1, depositAmt: 10, depositLoading: false,
+      depositDone: false, currentDepComment: '', depositStatus: 'Waiting...',
+      withdrawAmt: 10, withdrawWallet: '', withdrawLoading: false, withdrawSuccess: false,
       adminData: {
-        totalUsers: 0,
-        totalGames: 0,
-        totalVolume: 0,
-        houseBalance: 0,
-        deposits: [],
-        withdraws: [],
-        users: [],
+        totalUsers:0, totalGames:0, totalVolume:0, houseBalance:0,
+        adminBalance:0, commissionEarned:0,
+        deposits:[], withdraws:[], users:[]
       },
-
-      // UI
-      toastMsg: '',
-      _toastTimer: null,
-      
-      // Auto-check interval for deposits
-      _depositCheckInterval: null,
-      _lastCheckedTx: {},
-      _isCheckingDeposits: false,
+      toastMsg: '', _toastTimer: null,
+      _depositCheckInterval: null, _lastCheckedTx: {}, _isCheckingDeposits: false,
       _reconnectTimer: null,
+      // Флаг для проверки создания игры
+      _isCreatingGame: false,
     };
   },
 
   computed: {
-    isAdmin() { 
-      return this.user?.handle === 'whsxg';
-    },
-
+    isAdmin() { return this.user?.handle === ADMIN_HANDLE; },
     canBet() {
-      return !this.isSpinning && 
-             !this.userAlreadyBet &&
-             this.betAmount >= 0.1 && 
-             this.betAmount <= this.balance &&
-             (this.game.status === 'waiting' || this.game.status === 'waiting_for_players') &&
-             this.isConnected;
+      return !this.isSpinning && !this.userAlreadyBet &&
+        this.betAmount >= 0.1 && this.betAmount <= this.balance &&
+        (this.game.status === 'waiting' || this.game.status === 'waiting_for_players') &&
+        this.isConnected;
     },
-
-    userAlreadyBet() {
-      return this.game.players?.some(p => p.userId === this.user?.id) || false;
-    },
-
-    referralLink() {
-      return `https://t.me/TonRouletteBot?start=ref_${this.user?.id}`;
-    },
-
-    winRate() {
-      if (!this.stats.played) return 0;
-      return Math.round((this.stats.won / this.stats.played) * 100);
-    },
-    
+    userAlreadyBet() { return this.game.players?.some(p => p.userId === this.user?.id) || false; },
+    referralLink() { return `https://t.me/TonRouletteBot?start=ref_${this.user?.id}`; },
+    winRate() { return !this.stats.played ? 0 : Math.round((this.stats.won / this.stats.played) * 100); },
     canWithdraw() {
-      return this.withdrawAmt >= 0.1 && 
-             this.withdrawAmt <= this.balance && 
-             this.withdrawWallet.length >= 10 &&
-             isValidTonAddress(this.withdrawWallet);
+      return this.withdrawAmt >= 0.1 && this.withdrawAmt <= this.balance &&
+        this.withdrawWallet.length >= 10 && isValidAddr(this.withdrawWallet);
     },
-    
-    isValidTonAddress() {
-      return isValidTonAddress(this.withdrawWallet);
+    isValidTonAddress() { return isValidAddr(this.withdrawWallet); },
+    navIndicatorStyle() {
+      const idx = this.tab === 'game' ? 0 : this.tab === 'profile' ? 1 : 2;
+      return { transform: `translateX(${idx * 100}%)` };
     },
   },
 
   watch: {
     'game.players': {
-      handler() {
-        if (!this.isSpinning && !this.rafActive) {
-          requestAnimationFrame(() => this.drawWheel());
-        }
-      },
+      handler() { this.buildRouletteBlocks(); },
       deep: true
     },
-    'game.status': {
-      handler(newVal) {
-        if (newVal === 'waiting_for_players') {
-          this.spinAngle = 0;
-          this.spinProgress = 0;
-          requestAnimationFrame(() => this.drawWheel());
-        }
-      }
-    }
   },
 
   mounted() {
     this.tryTelegram();
-    if (typeof performance === 'undefined') { 
-      window.performance = { now: () => Date.now() }; 
-    }
-    
-    // Start checking for deposits every 15 seconds (реже, чтобы меньше нагрузки)
     this._depositCheckInterval = setInterval(() => {
-      if (this.user && !this._isCheckingDeposits && this.isConnected) {
+      if (this.user && !this._isCheckingDeposits && this.isConnected)
         this.checkPendingDeposits();
-      }
     }, 15000);
-    
-    // Проверка соединения
     this._reconnectTimer = setInterval(() => {
-      if (!this.isConnected && this.user) {
-        this.reconnect();
-      }
+      if (!this.isConnected && this.user) this.reconnect();
     }, 5000);
   },
 
   beforeUnmount() {
     this.stopTimer();
-    this.stopAnimation();
     this._unsubGame?.();
     this._unsubUser?.();
-    Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
-    if (this._depositCheckInterval) clearInterval(this._depositCheckInterval);
-    if (this._reconnectTimer) clearInterval(this._reconnectTimer);
+    Object.values(this._unsubAdmin).forEach(u => u?.());
+    clearInterval(this._depositCheckInterval);
+    clearInterval(this._reconnectTimer);
   },
 
   methods: {
-    // ==================== ANIMATION CONTROL ====================
-    stopAnimation() {
-      if (this.animFrame) {
-        cancelAnimationFrame(this.animFrame);
-        this.animFrame = null;
-        this.rafActive = false;
+    // ==================== ИНИЦИАЛИЗАЦИЯ ИГРЫ ====================
+    async ensureGameExists() {
+      if (this._isCreatingGame) return;
+      
+      this._isCreatingGame = true;
+      try {
+        const gameRef = doc(db, 'config', 'currentGame');
+        const gameSnap = await getDoc(gameRef);
+        
+        if (!gameSnap.exists()) {
+          console.log('No active game found, creating new game...');
+          await this.createFirestoreRound();
+          this.showToast('🎮 New game created!');
+        }
+      } catch (e) {
+        console.error('Error ensuring game exists:', e);
+      } finally {
+        this._isCreatingGame = false;
       }
     },
 
-    // ==================== RECONNECT ====================
+    // ==================== РЕФЕРАЛЬНАЯ СИСТЕМА ====================
+    getRefFromStartParam() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const start = params.get('start');
+        if (start && start.startsWith('ref_')) {
+          return start.replace('ref_', '');
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+
+    async processReferral(newUserId, referrerId) {
+      if (!referrerId || referrerId === newUserId) return;
+
+      try {
+        await runTransaction(db, async (transaction) => {
+          const referrerRef = doc(db, 'users', referrerId);
+          const referrerSnap = await transaction.get(referrerRef);
+
+          if (!referrerSnap.exists()) return;
+
+          transaction.update(referrerRef, {
+            balance: increment(REFERRAL_BONUS),
+            'stats.referrals': increment(1),
+            'stats.referralEarned': increment(REFERRAL_BONUS)
+          });
+
+          const referralHistoryRef = doc(collection(db, 'users', referrerId, 'referrals'));
+          transaction.set(referralHistoryRef, {
+            userId: newUserId,
+            bonus: REFERRAL_BONUS,
+            ts: serverTimestamp()
+          });
+
+          const newUserRef = doc(db, 'users', newUserId);
+          transaction.update(newUserRef, {
+            referredBy: referrerId
+          });
+        });
+
+        await addDoc(collection(db, 'users', referrerId, 'history'), {
+          type: 'referral_bonus',
+          amount: REFERRAL_BONUS,
+          description: 'Referral bonus',
+          ts: serverTimestamp()
+        });
+
+        console.log(`✅ Referral bonus ${REFERRAL_BONUS} TON sent to ${referrerId}`);
+      } catch (e) {
+        console.error('Error processing referral:', e);
+      }
+    },
+
+    // ── BLOCK ROULETTE ──
+    buildRouletteBlocks() {
+      if (!this.game.players || this.game.players.length === 0) {
+        this.rouletteBlocks = [];
+        this.stripOffset = 0;
+        return;
+      }
+      const total = this.game.totalBet || 1;
+      const base = this.game.players.map((p, i) => ({
+        userId: p.userId,
+        emoji: p.emoji,
+        shortName: p.name.split(' ')[0].slice(0, 8),
+        bet: p.bet,
+        color: COLORS[i % COLORS.length],
+        width: Math.max(60, Math.round((p.bet / total) * 400)),
+        isWinner: false,
+      }));
+      let blocks = [];
+      for (let r = 0; r < TRACK_REPEAT; r++) {
+        base.forEach(b => blocks.push({ ...b, _rep: r }));
+      }
+      this.rouletteBlocks = blocks;
+      this.stripOffset = 0;
+    },
+
+    startBlockSpin(winnerData) {
+      if (!this.game.players.length || !winnerData) return;
+      const total = this.game.totalBet || 1;
+      const viewportCenter = 150;
+
+      const winIdx = this.game.players.findIndex(p => p.userId === winnerData.userId);
+      if (winIdx < 0) return;
+
+      const widths = this.game.players.map(p => Math.max(60, Math.round((p.bet / total) * 400)));
+      const totalTrackWidth = widths.reduce((s, w) => s + w, 0);
+
+      let offsetToWinner = 0;
+      for (let i = 0; i < winIdx; i++) offsetToWinner += widths[i];
+      offsetToWinner += widths[winIdx] / 2;
+
+      const targetOffset = -(totalTrackWidth * 2 + offsetToWinner - viewportCenter);
+
+      this.rouletteBlocks.forEach(b => {
+        b.isWinner = b.userId === winnerData.userId;
+      });
+
+      this.$nextTick(() => {
+        this.stripOffset = targetOffset;
+      });
+
+      setTimeout(() => {
+        this.showWinnerOverlay(winnerData);
+      }, SPIN_DURATION);
+    },
+
+    // ── RECONNECT ──
     reconnect() {
-      if (this.user) {
-        this.subscribeGame();
-        this._unsubUser?.();
-        this.listenToUser();
+      if (this.user) { 
+        this.subscribeGame(); 
+        this._unsubUser?.(); 
+        this.listenToUser(); 
+        this.ensureGameExists();
       }
     },
 
-    // ==================== TONCENTER INTEGRATION ====================
-    
-    async fetchTonCenterTransactions() {
-      // В продакшне заменить на реальный API
-      return [];
-    },
-    
+    // ── TONCENTER ──
+    async fetchTonCenterTransactions() { return []; },
+
     async checkPendingDeposits() {
       if (!this.user || this._isCheckingDeposits) return;
-      
       this._isCheckingDeposits = true;
-      
       try {
-        const pendingQuery = query(
-          collection(db, 'deposit_requests'),
-          where('userId', '==', this.user.id),
-          where('status', '==', 'pending'),
-          limit(5)
-        );
-        
-        const snapshot = await getDocs(pendingQuery);
-        if (snapshot.empty) {
-          this._isCheckingDeposits = false;
-          return;
-        }
-        
-        const transactions = await this.fetchTonCenterTransactions();
-        if (!transactions || transactions.length === 0) {
-          this._isCheckingDeposits = false;
-          return;
-        }
-        
-        for (const docSnapshot of snapshot.docs) {
-          const deposit = docSnapshot.data();
-          
-          if (this._lastCheckedTx[deposit.id]) continue;
-          
-          for (const tx of transactions) {
+        const q = query(collection(db,'deposit_requests'),
+          where('userId','==',this.user.id), where('status','==','pending'), limit(5));
+        const snap = await getDocs(q);
+        if (snap.empty) return;
+        const txs = await this.fetchTonCenterTransactions();
+        if (!txs?.length) return;
+        for (const ds of snap.docs) {
+          const dep = ds.data();
+          if (this._lastCheckedTx[dep.id]) continue;
+          for (const tx of txs) {
             if (!tx.comment) continue;
-            
-            const cleanComment = tx.comment.replace(/\0/g, '').trim();
-            const expectedComment = deposit.comment.replace(/\0/g, '').trim();
-            
-            if (cleanComment.includes(expectedComment) || expectedComment.includes(cleanComment)) {
-              await this.processDeposit(docSnapshot.ref, deposit, tx);
-              this._lastCheckedTx[deposit.id] = true;
+            if (tx.comment.replace(/\0/g,'').trim().includes(dep.comment.replace(/\0/g,'').trim())) {
+              await this.processDeposit(ds.ref, dep, tx);
+              this._lastCheckedTx[dep.id] = true;
               break;
             }
           }
         }
-      } catch (e) {
-        console.error('Error checking deposits:', e);
-      } finally {
-        this._isCheckingDeposits = false;
-      }
-    },
-    
-    async processDeposit(docRef, deposit, tx) {
-      try {
-        await runTransaction(db, async (transaction) => {
-          const userRef = doc(db, 'users', deposit.userId);
-          const userSnap = await transaction.get(userRef);
-          
-          if (!userSnap.exists()) throw new Error('User not found');
-          
-          transaction.update(userRef, { balance: increment(deposit.amount) });
-          transaction.update(docRef, {
-            status: 'completed',
-            txHash: tx.hash,
-            completedAt: serverTimestamp()
-          });
-        });
-        
-        await addDoc(collection(db, 'users', deposit.userId, 'history'), {
-          type: 'deposit',
-          amount: deposit.amount,
-          txHash: tx.hash,
-          ts: serverTimestamp()
-        });
-        
-        const statsRef = doc(db, 'config', 'stats');
-        await setDoc(statsRef, {
-          totalDeposits: increment(deposit.amount),
-          totalTransactions: increment(1)
-        }, { merge: true });
-        
-        this.showToast(`✅ +${this.fmt(deposit.amount)} TON deposited!`);
-        
-        if (this.user?.id === deposit.userId && this.modal === 'deposit') {
-          this.depositStatus = 'Transaction confirmed!';
-          this.depositDone = true;
-          setTimeout(() => this.closeModal(), 2000);
-        }
-        
-      } catch (e) {
-        console.error('Error processing deposit:', e);
-      }
+      } catch(e) { console.error(e); } finally { this._isCheckingDeposits = false; }
     },
 
-    // ==================== AUTH ====================
-    
+    async processDeposit(docRef, deposit, tx) {
+      try {
+        await runTransaction(db, async (t) => {
+          const uRef = doc(db,'users',deposit.userId);
+          const uSnap = await t.get(uRef);
+          if (!uSnap.exists()) throw new Error('User not found');
+          t.update(uRef, { balance: increment(deposit.amount) });
+          t.update(docRef, { status:'completed', txHash:tx.hash, completedAt:serverTimestamp() });
+        });
+        await addDoc(collection(db,'users',deposit.userId,'history'), {
+          type:'deposit', amount:deposit.amount, txHash:tx.hash, ts:serverTimestamp()
+        });
+        await setDoc(doc(db,'config','stats'), {
+          totalDeposits: increment(deposit.amount), totalTransactions: increment(1)
+        }, { merge:true });
+        this.showToast(`✅ +${this.fmt(deposit.amount)} TON deposited!`);
+        if (this.user?.id === deposit.userId && this.modal === 'deposit') {
+          this.depositStatus = 'Confirmed!'; this.depositDone = true;
+          setTimeout(() => this.closeModal(), 2000);
+        }
+      } catch(e) { console.error(e); }
+    },
+
+    // ── AUTH ──
     tryTelegram() {
       const tg = window.Telegram?.WebApp;
       if (tg?.initDataUnsafe?.user) {
-        tg.ready();
-        tg.expand();
+        tg.ready(); tg.expand();
         const u = tg.initDataUnsafe.user;
-        this.doLogin({
-          id: String(u.id),
-          name: u.first_name + (u.last_name ? ' ' + u.last_name : ''),
-          handle: u.username || String(u.id),
-        });
-      } else {
-        this.quickLogin();
-      }
+        this.doLogin({ id:String(u.id), name:u.first_name+(u.last_name?' '+u.last_name:''), handle:u.username||String(u.id) });
+      } else { this.quickLogin(); }
     },
 
     quickLogin() {
       const id = Date.now() % 100000;
-      this.doLogin({
-        id: String(id),
-        name: `Player${id}`,
-        handle: `p${id}`,
-      });
+      this.doLogin({ id:String(id), name:`Player${id}`, handle:`p${id}` });
     },
 
-    async doLogin(userData) {
-      userData.emoji = EMOJIS[randInt(EMOJIS.length)];
-      this.user = userData;
-      
+    async doLogin(ud) {
+      ud.emoji = EMOJIS[randInt(EMOJIS.length)];
+      this.user = ud;
+
+      const referrerId = this.getRefFromStartParam();
+
       try {
-        const userRef = doc(db, 'users', userData.id);
-        const userSnap = await getDoc(userRef);
+        const ref = doc(db,'users',ud.id);
+        const snap = await getDoc(ref);
 
-        if (!userSnap.exists()) {
-          await runTransaction(db, async (transaction) => {
-            transaction.set(userRef, {
-              name: userData.name,
-              handle: userData.handle,
-              emoji: userData.emoji,
-              balance: 100,
-              stats: { played: 0, won: 0, earned: 0 },
-              createdAt: serverTimestamp(),
+        if (!snap.exists()) {
+          await runTransaction(db, async (t) => {
+            t.set(ref, {
+              name:ud.name,
+              handle:ud.handle,
+              emoji:ud.emoji,
+              balance:100,
+              stats:{
+                played:0,
+                won:0,
+                earned:0,
+                referrals:0,
+                referralEarned:0
+              },
+              referredBy: referrerId,
+              createdAt: serverTimestamp()
             });
-            const statsRef = doc(db, 'config', 'stats');
-            transaction.set(statsRef, { totalUsers: increment(1) }, { merge: true });
+            t.set(doc(db,'config','stats'), {totalUsers:increment(1)}, {merge:true});
           });
-        } else {
-          await updateDoc(userRef, { lastSeen: serverTimestamp() });
-          const existingData = userSnap.data();
-          if (existingData.emoji) this.user.emoji = existingData.emoji;
-        }
 
+          if (referrerId) {
+            await this.processReferral(ud.id, referrerId);
+          }
+        } else {
+          await updateDoc(ref, {lastSeen:serverTimestamp()});
+          if (snap.data().emoji) this.user.emoji = snap.data().emoji;
+        }
+        
         this.listenToUser();
         await this.loadHistory();
+        
+        // Проверяем и создаем игру если нужно
+        await this.ensureGameExists();
         this.subscribeGame();
+        
         this.isConnected = true;
-        this.connectionError = false;
-
-      } catch (e) {
-        console.error('Firebase login error:', e);
-        this.showToast('Could not connect to server.');
-        this.balance = 100;
+      } catch(e) {
+        console.error(e);
+        this.balance = 100; 
         this.isConnected = false;
-        this.connectionError = true;
-        requestAnimationFrame(() => this.drawWheel());
+        this.showToast('Could not connect.');
       }
     },
 
     listenToUser() {
       if (!this.user) return;
-      const userRef = doc(db, 'users', this.user.id);
-      this._unsubUser = onSnapshot(userRef, (snap) => {
+      this._unsubUser = onSnapshot(doc(db,'users',this.user.id), (snap) => {
         if (!snap.exists()) return;
         const d = snap.data();
         this.balance = d.balance || 0;
-        this.stats = d.stats || { played: 0, won: 0, earned: 0 };
-      }, (err) => {
-        console.error('User snapshot error:', err);
+        this.stats = d.stats || {played:0,won:0,earned:0, referrals:0, referralEarned:0};
       });
     },
 
-    // ==================== GAME LOGIC ====================
-    
+    // ── GAME ──
     subscribeGame() {
-      const gameRef = doc(db, 'config', 'currentGame');
-      let prevStatus = '';
-
+      const gameRef = doc(db,'config','currentGame');
+      let prev = '';
+      
       this._unsubGame = onSnapshot(gameRef, async (snap) => {
         this.isConnected = true;
-        this.connectionError = false;
-
+        
         if (!snap.exists()) {
-          if (this.isAdmin) await this.createFirestoreRound();
-          requestAnimationFrame(() => this.drawWheel());
+          console.log('Game snapshot: game does not exist');
+          // Не создаем игру здесь, чтобы избежать циклов
+          // Игра будет создана при необходимости через ensureGameExists
+          this.game = {
+            id: null,
+            players: [],
+            totalBet: 0,
+            status: 'waiting_for_players',
+            endsAt: null,
+            winner: null,
+            roundId: null
+          };
           return;
         }
-
+        
         const d = snap.data();
-        const newGame = {
-          id: snap.id,
-          players: d.players || [],
-          totalBet: d.totalBet || 0,
-          status: d.status,
-          endsAt: d.endsAt?.toMillis?.() || null,
-          spinStartTime: d.spinStartTime?.toMillis?.() || null,
-          spinDuration: d.spinDuration || SPIN_DURATION,
-          winner: d.winner || null,
-          roundId: d.roundId || Date.now()
+        const ng = {
+          id:snap.id, 
+          players:d.players||[], 
+          totalBet:d.totalBet||0,
+          status:d.status, 
+          endsAt:d.endsAt?.toMillis?.()||null,
+          spinStartTime:d.spinStartTime?.toMillis?.()||null,
+          spinDuration:d.spinDuration||SPIN_DURATION,
+          winner:d.winner||null, 
+          roundId:d.roundId||Date.now()
         };
 
-        // Handle state changes
-        if (newGame.status === 'spinning' && prevStatus !== 'spinning') {
-          this.isSpinning = true;
+        if (ng.status==='spinning' && prev!=='spinning') {
+          this.isSpinning = true; 
           this.stopTimer();
-          
-          requestAnimationFrame(() => {
-            this.startSpinAnimation(newGame);
-          });
-        } 
-        else if (newGame.status === 'waiting' && prevStatus !== 'waiting') {
-          this.isSpinning = false;
-          this.winnerOverlay = null;
+          this.game = ng;
+          this.buildRouletteBlocks();
+          this.$nextTick(() => this.startBlockSpin(ng.winner));
+        } else if (ng.status==='waiting' && prev!=='waiting') {
+          this.isSpinning = false; 
+          this.winnerOverlay = null; 
           this.startClientTimer();
-        }
-        else if (newGame.status === 'waiting_for_players' && prevStatus !== 'waiting_for_players') {
-          this.isSpinning = false;
+        } else if (ng.status==='waiting_for_players' && prev!=='waiting_for_players') {
+          this.isSpinning = false; 
           this.winnerOverlay = null;
-          this.spinAngle = 0;
-          this.spinProgress = 0;
-          this.timeLeft = ROUND_TIME;
+          this.timeLeft = ROUND_TIME; 
           this.stopTimer();
+          this.stripOffset = 0;
         }
 
-        // Show winner if game is finished
-        if (newGame.winner && newGame.status !== 'spinning' && !this.winnerOverlay) {
-          this.showWinnerOverlay(newGame.winner);
-        }
+        if (ng.winner && ng.status!=='spinning' && !this.winnerOverlay)
+          this.showWinnerOverlay(ng.winner);
 
-        this.game = newGame;
-        prevStatus = newGame.status;
-        
-        requestAnimationFrame(() => this.drawWheel());
-        
+        this.game = ng; 
+        prev = ng.status;
       }, (err) => {
-        console.error('Game snapshot error:', err);
-        this.showToast('Connection error');
+        console.error('Game snapshot error:', err); 
         this.isConnected = false;
-        this.connectionError = true;
       });
     },
 
     startClientTimer() {
       this.stopTimer();
       this.timerHandle = setInterval(() => {
-        if (this.isSpinning || this.game.status !== 'waiting' || !this.game.endsAt) return;
-
-        const now = Date.now();
-        this.timeLeft = Math.max(0, Math.round((this.game.endsAt - now) / 1000));
-
-        if (this.timeLeft <= 0 && !this.isSpinning) {
-          this.stopTimer();
-          this.triggerRoundEnd();
+        if (this.isSpinning || this.game.status!=='waiting' || !this.game.endsAt) return;
+        this.timeLeft = Math.max(0, Math.round((this.game.endsAt - Date.now()) / 1000));
+        if (this.timeLeft <= 0 && !this.isSpinning) { 
+          this.stopTimer(); 
+          this.triggerRoundEnd(); 
         }
-      }, 500); // Увеличил до 500мс для меньшей нагрузки
+      }, 500);
     },
 
-    stopTimer() {
-      if (this.timerHandle) { 
-        clearInterval(this.timerHandle); 
-        this.timerHandle = null; 
-      }
-    },
+    stopTimer() { clearInterval(this.timerHandle); this.timerHandle = null; },
 
     async createFirestoreRound() {
+      console.log('Creating new game round...');
       try {
-        await setDoc(doc(db, 'config', 'currentGame'), {
-          players: [], 
-          totalBet: 0,
-          status: 'waiting_for_players',
-          endsAt: null, 
-          winner: null,
-          spinStartTime: null,
-          spinDuration: SPIN_DURATION,
-          roundId: Date.now(),
-          createdAt: serverTimestamp(),
+        await setDoc(doc(db,'config','currentGame'), {
+          players:[], 
+          totalBet:0, 
+          status:'waiting_for_players',
+          endsAt:null, 
+          winner:null, 
+          spinStartTime:null,
+          spinDuration:SPIN_DURATION, 
+          roundId:Date.now(), 
+          createdAt:serverTimestamp()
         });
-      } catch (e) { 
+        console.log('Game round created successfully');
+      } catch(e) { 
         console.error('Create round error:', e); 
       }
     },
 
-    async triggerRoundEnd(force = false) {
+    async triggerRoundEnd(force=false) {
       if (this.isSpinning) return;
-
       try {
-        await runTransaction(db, async (transaction) => {
-          const gameRef = doc(db, 'config', 'currentGame');
-          const gameDoc = await transaction.get(gameRef);
-          if (!gameDoc.exists()) return;
-
-          const gd = gameDoc.data();
+        await runTransaction(db, async (t) => {
+          const ref = doc(db,'config','currentGame');
+          const gd = (await t.get(ref)).data();
+          if (!gd) return;
           
-          if (gd.status === 'waiting' && (force || Date.now() >= (gd.endsAt?.toMillis() || 0))) {
+          if (gd.status==='waiting' && (force||Date.now()>=(gd.endsAt?.toMillis()||0))) {
+            // Если недостаточно игроков - возвращаем ставки
             if (!gd.players || gd.players.length < MIN_PLAYERS) {
-              for (const player of gd.players) {
-                const userRef = doc(db, 'users', player.userId);
-                transaction.update(userRef, {
-                  balance: increment(player.bet)
-                });
+              for (const p of gd.players) {
+                t.update(doc(db,'users',p.userId), {balance:increment(p.bet)});
               }
-              
-              transaction.update(gameRef, {
-                players: [],
-                totalBet: 0,
-                status: 'waiting_for_players',
-                endsAt: null,
-                winner: null,
-                spinStartTime: null,
-                roundId: Date.now()
+              t.update(ref, {
+                players:[],
+                totalBet:0,
+                status:'waiting_for_players',
+                endsAt:null,
+                winner:null,
+                spinStartTime:null,
+                roundId:Date.now()
               });
-              
               this.showToast('Not enough players. Bets refunded.');
             } else {
+              // Выбираем победителя
               const winner = weightedRandom(gd.players);
               const prize = gd.totalBet * (1 - HOUSE_FEE);
-              
-              transaction.update(gameRef, { 
-                status: 'spinning',
-                winner: {
-                  userId: winner.userId,
-                  name: winner.name,
-                  prize: prize
-                },
-                spinStartTime: serverTimestamp(),
-                spinDuration: SPIN_DURATION
+              const commission = gd.totalBet * HOUSE_FEE;
+
+              t.update(ref, {
+                status:'spinning',
+                winner:{userId:winner.userId, name:winner.name, prize},
+                spinStartTime:serverTimestamp(),
+                spinDuration:SPIN_DURATION
               });
+
+              // Начисляем комиссию админу
+              const adminQuery = query(collection(db,'users'), where('handle','==',ADMIN_HANDLE));
+              const adminSnap = await getDocs(adminQuery);
+              if (!adminSnap.empty) {
+                const adminRef = adminSnap.docs[0].ref;
+                t.update(adminRef, {
+                  balance: increment(commission),
+                  'stats.earned': increment(commission)
+                });
+              }
             }
           }
         });
-      } catch (e) {
-        console.error("Failed to end round: ", e);
-      }
+      } catch(e) { console.error(e); }
     },
 
-    startSpinAnimation(gameData) {
-      if (!gameData || !gameData.winner || !gameData.spinStartTime) {
-        return;
-      }
-      
-      if (!gameData.players || gameData.players.length === 0) {
-        return;
-      }
-      
-      this.stopAnimation();
-      this.isSpinning = true;
-      this.rafActive = true;
-      
-      const now = Date.now();
-      const elapsed = now - gameData.spinStartTime;
-      const progress = Math.min(1, Math.max(0, elapsed / gameData.spinDuration));
-      
-      this.spinProgress = progress;
-      
-      if (progress >= 1) {
-        this.spinProgress = 1;
-        this.showWinnerOverlay(gameData.winner);
-        this.rafActive = false;
-        return;
-      }
-      
-      this.calculateTargetAngle(gameData.winner, gameData.players, gameData.totalBet);
-      this.animateSpin(gameData.winner, gameData.spinStartTime, gameData.spinDuration);
-    },
-
-    calculateTargetAngle(winnerData, players, totalBet) {
-      if (!players || players.length === 0 || totalBet === 0) {
-        this.targetAngle = 0;
-        return;
-      }
-      
-      let currentAngle = 0;
-      let winStart = 0;
-      let winEnd = 0;
-
-      for (const p of players) {
-        const sweep = (p.bet / totalBet) * 2 * Math.PI;
-        if (p.userId === winnerData.userId) {
-          winStart = currentAngle;
-          winEnd = currentAngle + sweep;
-        }
-        currentAngle += sweep;
-      }
-
-      const winMidPoint = winStart + (winEnd - winStart) / 2;
-      const pointerOffset = -Math.PI / 2;
-      const targetBase = pointerOffset - winMidPoint;
-      
-      const hash = winnerData.userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-      const spins = 5 + (hash % 4);
-      
-      this.targetAngle = targetBase + spins * 2 * Math.PI;
-    },
-
-    animateSpin(winnerData, spinStartTime, spinDuration) {
-      const startAng = this.spinAngle;
-      const targetAng = this.targetAngle;
-      
-      const animate = () => {
-        if (!this.isSpinning) {
-          this.rafActive = false;
-          return;
-        }
-        
-        const now = Date.now();
-        const elapsed = now - spinStartTime;
-        let progress = Math.min(1, Math.max(0, elapsed / spinDuration));
-        
-        this.spinProgress = progress;
-        
-        const easeOut = 1 - Math.pow(1 - progress, 3);
-        this.spinAngle = startAng + (targetAng - startAng) * easeOut;
-        
-        this.drawWheel();
-
-        if (progress < 1) {
-          this.animFrame = requestAnimationFrame(animate);
-        } else {
-          this.spinAngle = targetAng;
-          this.drawWheel();
-          this.showWinnerOverlay(winnerData);
-          this.rafActive = false;
-        }
-      };
-      
-      this.animFrame = requestAnimationFrame(animate);
-    },
-
-    showWinnerOverlay(winnerData) {
-      if (!winnerData) return;
-      
-      const isWinnerMe = winnerData.userId === this.user?.id;
-      const myBet = this.game.players?.find(p => p.userId === this.user?.id);
-      
-      this.winnerOverlay = {
-        name: winnerData.name,
-        prize: winnerData.prize,
-        isMe: isWinnerMe,
-        myLoss: myBet && !isWinnerMe ? myBet.bet : 0,
-      };
-      
+    showWinnerOverlay(w) {
+      if (!w) return;
+      const isMe = w.userId===this.user?.id;
+      const myBet = this.game.players?.find(p=>p.userId===this.user?.id);
+      this.winnerOverlay = { name:w.name, prize:w.prize, isMe, myLoss:myBet&&!isMe?myBet.bet:0 };
       this.isSpinning = false;
-      this.rafActive = false;
-      
-      setTimeout(() => {
-        if (this.winnerOverlay) {
-          this.dismissWinner();
-        }
-      }, 5000);
+      setTimeout(()=>{ if(this.winnerOverlay) this.dismissWinner(); }, 6000);
     },
 
-    dismissWinner() { 
-      this.winnerOverlay = null; 
-    },
+    dismissWinner() { this.winnerOverlay = null; },
 
-    // ==================== BETTING ====================
-    
-    adjustBet(delta) {
-      let newAmount = this.betAmount + delta;
-      newAmount = Math.max(0.1, Math.min(this.balance, newAmount));
-      this.betAmount = Math.round(newAmount * 10) / 10;
+    // ── BETTING ──
+    adjustBet(d) {
+      let v = Math.round((this.betAmount+d)*10)/10;
+      this.betAmount = Math.max(0.1, Math.min(this.balance, v));
     },
 
     async placeBet() {
       if (!this.canBet) return;
       
-      this.betLoading = true;
+      // Проверяем существование игры перед ставкой
+      await this.ensureGameExists();
+      
+      this.betLoading = true; 
       this.betError = '';
-
-      const gameRef = doc(db, 'config', 'currentGame');
-      const userRef = doc(db, 'users', this.user.id);
-
       try {
-        await runTransaction(db, async (transaction) => {
-          const [gameDoc, userDoc] = await Promise.all([
-            transaction.get(gameRef),
-            transaction.get(userRef),
-          ]);
-
-          if (!gameDoc.exists()) throw new Error("No active game");
-          if (!userDoc.exists()) throw new Error("User not found");
-
-          const gd = gameDoc.data();
-          const bal = userDoc.data().balance || 0;
-
-          if (bal < this.betAmount) throw new Error('Insufficient balance');
-          if (gd.status === 'spinning') throw new Error('Round is spinning');
-          if ((gd.players || []).some(p => p.userId === this.user.id)) {
-            throw new Error('Already placed bet');
-          }
-
-          transaction.update(userRef, { balance: increment(-this.betAmount) });
-
-          const newPlayer = {
-            userId: this.user.id,
-            name: this.user.name,
-            emoji: this.user.emoji,
-            bet: this.betAmount,
-          };
-
-          const players = [...(gd.players || []), newPlayer];
-          const totalBet = (gd.totalBet || 0) + this.betAmount;
+        await runTransaction(db, async (t) => {
+          const gRef = doc(db,'config','currentGame');
+          const uRef = doc(db,'users',this.user.id);
           
-          const updates = {
-            players: players,
-            totalBet: totalBet,
-          };
-
-          if (gd.status === 'waiting_for_players') {
-            updates.status = 'waiting';
-            updates.endsAt = new Date(Date.now() + ROUND_TIME * 1000);
+          // Проверяем существование игры в транзакции
+          const gd = await t.get(gRef);
+          if (!gd.exists()) {
+            // Если игры нет, создаем её прямо в транзакции
+            t.set(gRef, {
+              players:[], 
+              totalBet:0, 
+              status:'waiting_for_players',
+              endsAt:null, 
+              winner:null, 
+              spinStartTime:null,
+              spinDuration:SPIN_DURATION, 
+              roundId:Date.now(), 
+              createdAt:serverTimestamp()
+            });
           }
-
-          transaction.update(gameRef, updates);
+          
+          const gameData = gd.exists() ? gd.data() : { players:[], totalBet:0, status:'waiting_for_players' };
+          const ud = await t.get(uRef);
+          
+          const bal = ud.data().balance||0;
+          if (bal<this.betAmount) throw new Error('Insufficient balance');
+          if (gameData.status==='spinning') throw new Error('Round is spinning');
+          if ((gameData.players||[]).some(p=>p.userId===this.user.id)) throw new Error('Already bet');
+          
+          t.update(uRef, {balance:increment(-this.betAmount)});
+          
+          const players = [...(gameData.players||[]), {
+            userId:this.user.id, 
+            name:this.user.name, 
+            emoji:this.user.emoji, 
+            bet:this.betAmount
+          }];
+          
+          const updates = { 
+            players, 
+            totalBet:(gameData.totalBet||0)+this.betAmount 
+          };
+          
+          if (gameData.status==='waiting_for_players') { 
+            updates.status='waiting'; 
+            updates.endsAt=new Date(Date.now()+ROUND_TIME*1000); 
+          }
+          
+          t.update(gRef, updates);
         });
-
-        this.getTg()?.HapticFeedback?.notificationOccurred('success');
-        this.showToast(`✅ Bet placed: ${this.fmt(this.betAmount)} TON`);
-
-      } catch (e) {
+        this.showToast(`✅ Bet: ${this.fmt(this.betAmount)} TON`);
+      } catch(e) {
         this.betError = e.message;
-        setTimeout(() => { this.betError = ''; }, 3500);
-        this.getTg()?.HapticFeedback?.notificationOccurred('error');
-      } finally {
-        this.betLoading = false;
-      }
+        setTimeout(()=>{ this.betError=''; }, 3500);
+      } finally { this.betLoading = false; }
     },
 
-    // ==================== WHEEL DRAWING ====================
-    
-    drawWheel() {
-      const canvas = this.$refs.wheelCanvas;
-      if (!canvas) return;
-      
-      const ctx = canvas.getContext('2d');
-      const [w, h] = [canvas.width, canvas.height];
-      const cx = w / 2, cy = h / 2;
-      const r = w / 2 - 12;
-      
-      ctx.clearRect(0, 0, w, h);
-      ctx.shadowBlur = 0;
-
-      if (!this.game.players || this.game.players.length === 0) {
-        // Draw empty wheel
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-        
-        const gradient = ctx.createRadialGradient(cx-20, cy-20, 10, cx, cy, r);
-        gradient.addColorStop(0, '#2a2a2e');
-        gradient.addColorStop(1, '#1a1a1f');
-        ctx.fillStyle = gradient;
-        ctx.fill();
-        
-        ctx.strokeStyle = '#3a3a3e';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        // Center
-        ctx.beginPath();
-        ctx.arc(cx, cy, 35, 0, 2 * Math.PI);
-        ctx.fillStyle = '#0d0d0f';
-        ctx.fill();
-        ctx.strokeStyle = '#f0b429';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        // Text
-        ctx.fillStyle = '#8a8a8e';
-        ctx.font = 'bold 16px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(this.game.status === 'spinning' ? '🎡' : '🎰', cx, cy-10);
-        ctx.font = '12px system-ui, sans-serif';
-        ctx.fillText(this.game.status === 'spinning' ? 'Spinning...' : 'No bets', cx, cy+15);
-        
-        return;
-      }
-
-      const total = this.game.totalBet;
-      let startAngle = this.spinAngle;
-
-      // Draw segments
-      this.game.players.forEach((player, i) => {
-        const sliceAngle = (player.bet / total) * 2 * Math.PI;
-        const endAngle = startAngle + sliceAngle;
-
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, r, startAngle, endAngle);
-        ctx.closePath();
-        
-        ctx.fillStyle = COLORS[i % COLORS.length];
-        ctx.fill();
-        
-        ctx.strokeStyle = '#00000040';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        startAngle = endAngle;
-      });
-
-      // Draw center
-      ctx.beginPath();
-      ctx.arc(cx, cy, 35, 0, 2 * Math.PI);
-      
-      const centerGradient = ctx.createRadialGradient(cx-5, cy-5, 5, cx, cy, 35);
-      centerGradient.addColorStop(0, '#2a2a2e');
-      centerGradient.addColorStop(1, '#0d0d0f');
-      ctx.fillStyle = centerGradient;
-      ctx.fill();
-      
-      ctx.strokeStyle = '#f0b429';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      
-      // Logo
-      ctx.shadowColor = '#f0b429';
-      ctx.shadowBlur = 10;
-      ctx.font = 'bold 24px system-ui, sans-serif';
-      ctx.fillStyle = '#f0b429';
-      ctx.fillText('◎', cx-14, cy+7);
-      ctx.shadowBlur = 0;
-      
-      // Progress indicator
-      if (this.isSpinning && this.spinProgress > 0 && this.spinProgress < 1) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, 30, -Math.PI/2, (this.spinProgress * 2 * Math.PI) - Math.PI/2);
-        ctx.strokeStyle = '#f0b429';
-        ctx.lineWidth = 4;
-        ctx.shadowColor = '#f0b429';
-        ctx.shadowBlur = 10;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      }
-    },
-
+    // ── UTILS ──
     getTimerWidth() {
-      if (this.isSpinning || this.game.status === 'waiting_for_players') return '0%';
-      return `${(this.timeLeft / ROUND_TIME) * 100}%`;
+      if (this.isSpinning||this.game.status==='waiting_for_players') return '0%';
+      return `${(this.timeLeft/ROUND_TIME)*100}%`;
     },
 
-    playerColor(userId) {
-      const index = this.game.players?.findIndex(p => p.userId === userId) || 0;
-      return COLORS[index % COLORS.length];
+    playerChance(p) { return ((p.bet/(this.game.totalBet||1))*100).toFixed(1); },
+    fmt(n) { return (n||0).toFixed(2); },
+    formatTime(ts) {
+      if (!ts) return '';
+      const d = ts.toDate?ts.toDate():new Date(ts);
+      return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     },
-
-    playerChance(player) {
-      const total = this.game.totalBet || 1;
-      return ((player.bet / total) * 100).toFixed(1);
+    showToast(m) {
+      this.toastMsg = m; clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(()=>{ this.toastMsg=''; }, 3000);
     },
+    getTg() { return window.Telegram?.WebApp; },
 
-    // ==================== MODAL METHODS ====================
-    
-    openModal(type) {
-      this.modal = type;
-      
-      if (type === 'deposit') {
-        this.depositStep = 1;
-        this.depositAmt = 10;
-        this.depositDone = false;
-        this.depositLoading = false;
-        this.depositStatus = 'Waiting for transaction...';
-        this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0, 30);
-      } else if (type === 'withdraw') {
-        this.withdrawAmt = 10;
-        this.withdrawWallet = '';
-        this.withdrawLoading = false;
-        this.withdrawSuccess = false;
+    // ── MODALS ──
+    openModal(t) {
+      this.modal = t;
+      if (t==='deposit') {
+        this.depositStep=1; this.depositAmt=10; this.depositDone=false;
+        this.depositLoading=false; this.depositStatus='Waiting for transaction...';
+        this.currentDepComment = `dep_${this.user?.id}_${Date.now()}`.slice(0,30);
+      } else {
+        this.withdrawAmt=10; this.withdrawWallet='';
+        this.withdrawLoading=false; this.withdrawSuccess=false;
       }
     },
-    
-    closeModal() { 
-      this.modal = null;
-    },
-    
+    closeModal() { this.modal = null; },
     openTonLink() {
-      const nano = Math.round(this.depositAmt * 1e9);
-      const comment = encodeURIComponent(this.currentDepComment);
-      window.open(`ton://transfer/${HOUSE_WALLET}?amount=${nano}&text=${comment}`, '_blank');
+      const nano = Math.round(this.depositAmt*1e9);
+      window.open(`ton://transfer/${HOUSE_WALLET}?amount=${nano}&text=${encodeURIComponent(this.currentDepComment)}`,'_blank');
     },
-    
-    async copyText(text) {
-      try {
-        await navigator.clipboard.writeText(text);
-        this.showToast('Copied!');
-      } catch (err) {
-        this.showToast('Failed to copy');
-      }
+    async copyText(t) {
+      try { await navigator.clipboard.writeText(t); this.showToast('Copied!'); } catch { this.showToast('Copy failed'); }
     },
-    
     async submitDepositRequest() {
       this.depositLoading = true;
-      
       try {
-        await addDoc(collection(db, 'deposit_requests'), {
-          userId: this.user.id,
-          userName: this.user.name,
-          userHandle: this.user.handle,
-          amount: this.depositAmt,
-          comment: this.currentDepComment,
-          status: 'pending',
-          ts: serverTimestamp(),
+        await addDoc(collection(db,'deposit_requests'), {
+          userId:this.user.id, userName:this.user.name, userHandle:this.user.handle,
+          amount:this.depositAmt, comment:this.currentDepComment, status:'pending', ts:serverTimestamp()
         });
-        
-        this.depositStep = 3;
-        this.depositLoading = false;
-        this.depositStatus = 'Waiting for blockchain confirmation...';
-        
-        setTimeout(() => this.checkPendingDeposits(), 5000);
-        this.getTg()?.HapticFeedback?.notificationOccurred('success');
-        
-      } catch (e) { 
-        this.showToast('Error: ' + e.message); 
-        this.depositLoading = false;
-      }
+        this.depositStep = 3; this.depositLoading = false;
+        this.depositStatus = 'Waiting for blockchain confirmation…';
+        setTimeout(()=>this.checkPendingDeposits(), 5000);
+      } catch(e) { this.showToast('Error: '+e.message); this.depositLoading=false; }
     },
-    
     async submitWithdrawRequest() {
       if (!this.canWithdraw) return;
-      
       this.withdrawLoading = true;
-      
       try {
-        await runTransaction(db, async (transaction) => {
-          const userRef = doc(db, 'users', this.user.id);
-          const userSnap = await transaction.get(userRef);
-          
-          if (!userSnap.exists()) throw new Error('User not found');
-          
-          const userData = userSnap.data();
-          if (userData.balance < this.withdrawAmt) throw new Error('Insufficient balance');
-          
-          transaction.update(userRef, {
-            balance: increment(-this.withdrawAmt),
-            lockedBalance: increment(this.withdrawAmt)
-          });
-          
-          const withdrawRef = doc(collection(db, 'withdraw_requests'));
-          transaction.set(withdrawRef, {
-            userId: this.user.id,
-            userName: this.user.name,
-            userHandle: this.user.handle,
-            amount: this.withdrawAmt,
-            wallet: this.withdrawWallet.trim(),
-            status: 'pending',
-            ts: serverTimestamp()
+        await runTransaction(db, async (t) => {
+          const uRef = doc(db,'users',this.user.id);
+          const uSnap = await t.get(uRef);
+          if (!uSnap.exists()) throw new Error('User not found');
+          if (uSnap.data().balance<this.withdrawAmt) throw new Error('Insufficient balance');
+          t.update(uRef, {balance:increment(-this.withdrawAmt), lockedBalance:increment(this.withdrawAmt)});
+          t.set(doc(collection(db,'withdraw_requests')), {
+            userId:this.user.id, userName:this.user.name, userHandle:this.user.handle,
+            amount:this.withdrawAmt, wallet:this.withdrawWallet.trim(), status:'pending', ts:serverTimestamp()
           });
         });
-        
         this.withdrawSuccess = true;
-        this.showToast('Withdrawal request submitted!');
-        setTimeout(() => this.closeModal(), 2000);
-        
-      } catch (e) {
-        this.showToast('Error: ' + e.message);
-      } finally {
-        this.withdrawLoading = false;
-      }
+        setTimeout(()=>this.closeModal(), 2000);
+      } catch(e) { this.showToast('Error: '+e.message); } finally { this.withdrawLoading=false; }
     },
 
-    // ==================== PROFILE METHODS ====================
-    
+    // ── PROFILE ──
     async loadHistory() {
       try {
-        const q = query(
-          collection(db, 'users', this.user.id, 'history'),
-          orderBy('ts', 'desc'),
-          limit(20)
-        );
-        const snap = await getDocs(q);
-        this.history = snap.docs.map(d => ({ 
-          id: d.id, 
-          ...d.data(),
-          ts: d.data().ts?.toMillis() || Date.now()
-        }));
-      } catch(e) { 
-        console.warn("Could not load history", e.message); 
-      }
+        const q = query(collection(db,'users',this.user.id,'history'),orderBy('ts','desc'),limit(20));
+        const s = await getDocs(q);
+        this.history = s.docs.map(d=>({id:d.id,...d.data(),ts:d.data().ts?.toMillis()||Date.now()}));
+      } catch(e) { console.warn(e); }
+    },
+    async copyRef() {
+      try { await navigator.clipboard.writeText(this.referralLink); this.copied=true; setTimeout(()=>{this.copied=false;},2000); this.showToast('Copied!'); } catch {}
     },
 
-    // ==================== ADMIN METHODS ====================
-    
-    switchAdmin() {
-      this.tab = 'admin';
-      this.subscribeAdmin();
+    // ── ADMIN ──
+    switchAdmin() { 
+      this.tab='admin'; 
+      this.subscribeAdmin(); 
     },
     
     async subscribeAdmin() {
-      Object.values(this._unsubAdmin).forEach(unsub => unsub?.());
-      
+      Object.values(this._unsubAdmin).forEach(u=>u?.());
       try {
-        const statsSnap = await getDoc(doc(db, 'config', 'stats'));
-        if (statsSnap.exists()) Object.assign(this.adminData, statsSnap.data());
-        
-        const uSnap = await getDocs(
-          query(collection(db, 'users'), orderBy('balance', 'desc'), limit(50))
-        );
-        this.adminData.users = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const uSnap = await getDocs(query(collection(db,'users'),orderBy('balance','desc'),limit(50)));
+        this.adminData.users = uSnap.docs.map(d=>({id:d.id,...d.data()}));
         this.adminData.totalUsers = this.adminData.users.length;
-        
-        const gamesSnap = await getDocs(collection(db, 'games'));
-        let volume = 0;
-        gamesSnap.forEach(doc => { volume += doc.data().totalBet || 0; });
-        this.adminData.totalGames = gamesSnap.size;
-        this.adminData.totalVolume = volume;
-        
-        let houseBalance = 0;
-        uSnap.docs.forEach(doc => {
-          const data = doc.data();
-          houseBalance += (data.balance || 0) + (data.lockedBalance || 0);
-        });
-        this.adminData.houseBalance = houseBalance;
-        
-      } catch (e) { 
-        console.error('Admin data load error:', e); 
-      }
 
-      this._unsubAdmin.withdraws = onSnapshot(
-        query(collection(db, 'withdraw_requests'), where('status', '==', 'pending'), orderBy('ts', 'desc')),
-        (snap) => {
-          this.adminData.withdraws = snap.docs.map(d => ({ 
-            id: d.id, 
-            ...d.data(), 
-            processing: false,
-            ts: d.data().ts?.toMillis() || Date.now()
-          }));
-        }
-      );
+        const gSnap = await getDocs(collection(db,'games'));
+        let vol=0;
+        gSnap.forEach(d=>{vol+=d.data().totalBet||0;});
+        this.adminData.totalGames = gSnap.size;
+        this.adminData.totalVolume = vol;
+        this.adminData.commissionEarned = vol * HOUSE_FEE;
+
+        let hb=0;
+        let adminBal=0;
+        uSnap.docs.forEach(d=>{
+          const x=d.data();
+          hb+=(x.balance||0)+(x.lockedBalance||0);
+          if (x.handle === ADMIN_HANDLE) adminBal = x.balance || 0;
+        });
+        this.adminData.houseBalance = hb;
+        this.adminData.adminBalance = adminBal;
+
+      } catch(e){console.error(e);}
       
-      this._unsubAdmin.deposits = onSnapshot(
-        query(collection(db, 'deposit_requests'), orderBy('ts', 'desc'), limit(20)),
-        (snap) => {
-          this.adminData.deposits = snap.docs.map(d => ({ 
-            id: d.id, 
-            ...d.data(), 
-            ts: d.data().ts?.toMillis() || Date.now()
+      this._unsubAdmin.w = onSnapshot(
+        query(collection(db,'withdraw_requests'), where('status','==','pending'), orderBy('ts','desc')), 
+        s=>{
+          this.adminData.withdraws = s.docs.map(d=>({
+            id:d.id,
+            ...d.data(),
+            processing:false,
+            ts:d.data().ts?.toMillis()||Date.now()
           }));
-        }
-      );
+      });
+      
+      this._unsubAdmin.d = onSnapshot(
+        query(collection(db,'deposit_requests'), orderBy('ts','desc'), limit(20)), 
+        s=>{
+          this.adminData.deposits = s.docs.map(d=>({
+            id:d.id,
+            ...d.data(),
+            ts:d.data().ts?.toMillis()||Date.now()
+          }));
+      });
     },
     
     async approveWithdraw(r) {
-      r.processing = true;
+      r.processing=true;
       try {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'withdraw_requests', r.id), { 
-          status: 'approved', 
-          approvedAt: serverTimestamp(),
-          processedBy: this.user.id
+        const b=writeBatch(db);
+        b.update(doc(db,'withdraw_requests',r.id),{
+          status:'approved',
+          approvedAt:serverTimestamp(),
+          processedBy:this.user.id
         });
-        batch.update(doc(db, 'users', r.userId), { lockedBalance: increment(-r.amount) });
-        await batch.commit();
-        
-        await addDoc(collection(db, 'users', r.userId, 'history'), {
-          type: 'withdraw',
-          amount: -r.amount,
-          ts: serverTimestamp()
+        b.update(doc(db,'users',r.userId),{lockedBalance:increment(-r.amount)});
+        await b.commit();
+        await addDoc(collection(db,'users',r.userId,'history'),{
+          type:'withdraw',
+          amount:-r.amount,
+          ts:serverTimestamp()
         });
-        
         this.showToast(`✓ Approved ${r.amount} TON for ${r.userName}`);
-      } catch (e) { 
-        this.showToast('Error: ' + e.message); 
-      } finally {
-        r.processing = false;
-      }
+      } catch(e){this.showToast('Error: '+e.message);} finally{r.processing=false;}
     },
     
     async rejectWithdraw(r) {
-      r.processing = true;
+      r.processing=true;
       try {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'users', r.userId), {
-          balance: increment(r.amount),
-          lockedBalance: increment(-r.amount)
+        const b=writeBatch(db);
+        b.update(doc(db,'users',r.userId),{
+          balance:increment(r.amount),
+          lockedBalance:increment(-r.amount)
         });
-        batch.update(doc(db, 'withdraw_requests', r.id), { 
-          status: 'rejected', 
-          rejectedAt: serverTimestamp(),
-          processedBy: this.user.id
+        b.update(doc(db,'withdraw_requests',r.id),{
+          status:'rejected',
+          rejectedAt:serverTimestamp()
         });
-        await batch.commit();
-        this.showToast('Withdrawal rejected, funds returned');
-      } catch (e) { 
-        this.showToast('Error: ' + e.message); 
-      } finally {
-        r.processing = false;
-      }
+        await b.commit();
+        this.showToast('Rejected, funds returned');
+      } catch(e){this.showToast('Error: '+e.message);} finally{r.processing=false;}
     },
     
-    async adminAddBalance(u, amount) {
-      try {
-        await updateDoc(doc(db, 'users', u.id), { balance: increment(amount) });
-        this.showToast(`+${amount} TON → ${u.name}`);
-      } catch (e) { 
-        this.showToast('Error: ' + e.message); 
-      }
+    async adminAddBalance(u, a) {
+      try { 
+        await updateDoc(doc(db,'users',u.id),{balance:increment(a)}); 
+        this.showToast(`+${a} TON → ${u.name}`); 
+      } catch(e){this.showToast('Error: '+e.message);}
     },
     
     adminSetBalance(u) {
-      const val = prompt(`Set balance for ${u.name} (current: ${u.balance} TON):`);
-      if (val === null || isNaN(parseFloat(val))) return;
-      
-      const newBal = parseFloat(val);
-      updateDoc(doc(db, 'users', u.id), { balance: newBal })
-        .then(() => this.showToast(`Balance → ${newBal} TON`))
-        .catch(e => this.showToast('Error: ' + e.message));
-    },
-
-    // ==================== UTILITIES ====================
-    
-    fmt(num) {
-      if (num === undefined || num === null) return '0.00';
-      return num.toFixed(2);
-    },
-
-    formatTime(timestamp) {
-      if (!timestamp) return '';
-      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    },
-
-    showToast(msg) {
-      this.toastMsg = msg;
-      clearTimeout(this._toastTimer);
-      this._toastTimer = setTimeout(() => { this.toastMsg = ''; }, 3000);
-    },
-    
-    getTg() { 
-      return window.Telegram?.WebApp; 
-    },
-
-    async copyRef() {
-      try {
-        await navigator.clipboard.writeText(this.referralLink);
-        this.copied = true;
-        setTimeout(() => { this.copied = false; }, 2000);
-        this.showToast('Referral link copied!');
-      } catch (e) {
-        console.error('Copy failed:', e);
-      }
+      const v=prompt(`Balance for ${u.name} (now: ${u.balance}):`);
+      if (!v||isNaN(parseFloat(v))) return;
+      updateDoc(doc(db,'users',u.id),{balance:parseFloat(v)})
+        .then(()=>this.showToast('Done'))
+        .catch(e=>this.showToast('Error: '+e.message));
     },
   },
 };
 </script>
 
-<style scoped>
-/* THIS CSS IS WELL-WRITTEN AND FULLY RESPONSIVE. NO CHANGES ARE NEEDED. */
-/* It uses modern techniques like CSS variables, flexbox, and grid, and has a mobile-first design. */
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-.app{--bg:#0d0d0f;--s1:#141416;--s2:#1c1c1f;--s3:#242428;--bd:rgba(255,255,255,0.07);--bd2:rgba(255,255,255,0.13);--gold:#f0b429;--gold-bg:rgba(240,180,41,0.10);--green:#3ec97b;--red:#e05252;--blue:#52a0e0;--txt:#f0f0f0;--txt2:rgba(240,240,240,0.55);--txt3:rgba(240,240,240,0.28);--r:14px;font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;max-width:430px;margin:0 auto;padding-bottom:40px;-webkit-tap-highlight-color:transparent;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-button{font-family:inherit;cursor:pointer;border:none;outline:none;background:none}
-input{font-family:inherit;outline:none;border:none;background:none;color:inherit}
-input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
-.splash{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px}
-.splash-logo{display:flex;flex-direction:column;align-items:center;gap:8px}
-.splash-icon{font-size:52px;color:var(--gold)}
-.splash-title{font-size:30px;font-weight:600;letter-spacing:-.02em}
-.splash-sub{font-size:13px;color:var(--txt3);margin-bottom:8px}
-.splash-btn{padding:14px 44px;background:var(--gold);color:#0d0d0f;border-radius:40px;font-size:15px;font-weight:600;transition:transform .15s cubic-bezier(.2, .8, .4, 1)}
-.splash-btn:active{transform:scale(.95)}
-.hdr{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 0}
-.hdr-user{display:flex;align-items:center;gap:10px;min-width:0}
-.hdr-info{min-width:0}
-.hdr-avatar{width:38px;height:38px;border-radius:50%;background:var(--s2);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-.hdr-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hdr-handle{font-size:11px;color:var(--txt3);font-family:'DM Mono',monospace}
-.hdr-balance{display:flex;align-items:baseline;gap:4px;background:var(--gold-bg);border:1px solid rgba(240,180,41,.18);border-radius:40px;padding:8px 14px;cursor:pointer;transition:border-color .15s;flex-shrink:0}
-.hdr-balance:hover{border-color:rgba(240,180,41,.38)}
-.hdr-bal-num{font-family:'DM Mono',monospace;font-size:14px;color:var(--gold)}
-.hdr-bal-cur{font-size:10px;color:rgba(240,180,41,.6);text-transform:uppercase;margin-left:3px}
-.nav{display:flex;gap:6px;padding:14px 18px;position:sticky;top:0;z-index:40;background:var(--bg);border-bottom:1px solid var(--bd)}
-.nav-btn{flex:1;padding:9px 6px;border-radius:10px;border:1px solid transparent;font-size:13px;color:var(--txt2);transition:all .15s}
-.nav-btn.active{background:var(--s2);border-color:var(--bd2);color:var(--txt)}
-.tab{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
-.conn-banner{background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt2)}
-.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--gold);animation:blink 1s ease-in-out infinite;flex-shrink:0}
-.stats-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-.stat-box{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:14px 10px;text-align:center}
-.stat-val{display:block;font-family:'DM Mono',monospace;font-size:20px;line-height:1;margin-bottom:5px;transition:color .3s}
-.stat-val.danger{color:var(--red);animation:blink 1s ease-in-out infinite}
-.stat-val.gold{color:var(--gold)}
-.stat-lbl{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.08em}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
-.timer-track{height:3px;background:var(--s2);border-radius:2px;overflow:hidden}
-.timer-fill{height:100%;background:var(--gold);border-radius:2px}
-.timer-fill.danger{background:var(--red)}
-.wheel-section{display:flex;justify-content:center;margin:4px 0}
-.wheel-wrap{position:relative;width:280px;height:280px}
-.wheel-canvas{display:block;border-radius:50%;width:100%;height:100%}
-.wheel-pointer{position:absolute;top:-4px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:14px solid var(--gold);filter:drop-shadow(0 2px 6px rgba(240,180,41,.5));z-index:5}
-.wheel-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:46px;height:46px;background:var(--bg);border-radius:50%;border:2px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--txt3);z-index:4;pointer-events:none}
-.bet-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:10px}
-.bet-row{display:flex;align-items:center;gap:8px}
-.adj-btn{width:44px;height:44px;border-radius:10px;background:var(--s2);border:1px solid var(--bd2);color:var(--txt);font-size:22px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
-.adj-btn:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
-.adj-btn:disabled{opacity:.3;cursor:not-allowed}
-.bet-field{flex:1;height:44px;border-radius:10px;background:var(--s2);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;gap:6px;padding:0 12px}
-.bet-input{flex:1;font-family:'DM Mono',monospace;font-size:16px;text-align:center;width:100%}
-.bet-input:disabled{opacity:.5}
-.bet-cur{font-size:11px;color:var(--txt3)}
-.bet-error{font-size:12px;color:var(--red);text-align:center;min-height:1em}
-.quick-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-.quick-btn{flex:1;padding:8px 4px;border:1px solid var(--bd);border-radius:8px;color:var(--txt2);font-size:12px;font-family:'DM Mono',monospace;transition:all .15s}
-.quick-btn:hover:not(:disabled){border-color:var(--bd2);color:var(--txt)}
-.quick-btn:disabled{opacity:.3;cursor:not-allowed}
-.place-btn{width:100%;padding:13px;border-radius:11px;border:1px solid var(--bd);color:var(--txt2);font-size:14px;font-weight:500;transition:all .2s;position:relative}
-.place-btn.active{background:var(--gold);border-color:transparent;color:#0d0d0f;font-weight:600}
-.place-btn.active:hover{opacity:.9}
-.place-btn.done{background:var(--s2);border-color:var(--green);color:var(--green)}
-.place-btn:disabled:not(.done){cursor:not-allowed;background:var(--s2);color:var(--txt3)}
-.players-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px}
-.players-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.card-title{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--txt2)}
-.players-count{font-family:'DM Mono',monospace;font-size:11px;color:var(--txt3);background:var(--s2);padding:2px 8px;border-radius:20px}
-.empty-msg{font-size:13px;color:var(--txt3);text-align:center;padding:16px 0}
-.players-list{display:flex;flex-direction:column;gap:6px;min-height:40px}
-.player-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--s2);border-radius:10px;border-left:3px solid transparent;animation:slideUp .2s ease-out}
-@keyframes slideUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-.pr-left{display:flex;align-items:center;gap:8px;min-width:0}
-.pr-emoji{font-size:18px}
-.pr-name{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pr-me{font-weight:600}
-.pr-you{font-size:10px;color:var(--gold);margin-left:4px}
-.pr-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.pr-chance{font-size:11px;color:var(--txt3);font-family:'DM Mono',monospace;width:40px;text-align:right}
-.pr-bet{font-size:12px;color:var(--gold);font-family:'DM Mono',monospace}
-.profile-hero{text-align:center;padding:12px 0 4px}
-.profile-avatar{width:72px;height:72px;border-radius:50%;margin:0 auto 12px;background:var(--s2);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:36px}
-.profile-name{font-size:20px;font-weight:600}
-.profile-handle{font-size:12px;color:var(--txt3);font-family:'DM Mono',monospace;margin-top:2px}
-.pstats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.pstat{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:14px 6px;text-align:center}
-.pstat-val{display:block;font-family:'DM Mono',monospace;font-size:16px;margin-bottom:4px}
-.pstat-lbl{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.08em}
-.ref-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px}
-.ref-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.ref-bonus{font-size:11px;color:var(--green)}
-.ref-row{display:flex;gap:8px}
-.ref-input{flex:1;background:var(--s2);border:1px solid var(--bd);border-radius:9px;padding:10px 12px;font-size:11px;font-family:'DM Mono',monospace;color:var(--txt3)}
-.copy-btn{width:40px;height:40px;background:var(--s2);border:1px solid var(--bd2);border-radius:9px;font-size:15px;color:var(--txt2);display:flex;align-items:center;justify-content:center;transition:all .15s}
-.copy-btn:hover{border-color:var(--gold);color:var(--gold)}
-.fin-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.fin-btn{padding:13px;border-radius:11px;font-size:14px;font-weight:500;transition:opacity .15s}
-.fin-btn.green{background:rgba(62,201,123,.12);border:1px solid rgba(62,201,123,.25);color:var(--green)}
-.fin-btn.red{background:rgba(224,82,82,.12);border:1px solid rgba(224,82,82,.25);color:var(--red)}
-.fin-btn:hover:not(:disabled){opacity:.8}
-.fin-btn:disabled{opacity:.3;cursor:not-allowed}
-.history-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px}
-.history-list{display:flex;flex-direction:column;gap:6px}
-.history-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--s2);border-radius:9px}
-.hist-left{display:flex;align-items:center;gap:8px}
-.hist-result{font-size:10px;font-weight:600;letter-spacing:.08em}
-.hist-time{font-size:10px;color:var(--txt3)}
-.hist-amount{font-family:'DM Mono',monospace;font-size:13px}
-.win{color:var(--green)}.loss{color:var(--red)}
-.admin-tab{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
-.admin-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.astat{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:12px 6px;text-align:center}
-.astat-val{display:block;font-family:'DM Mono',monospace;font-size:16px;margin-bottom:3px}
-.astat-lbl{font-size:9px;color:var(--txt3);text-transform:uppercase}
-.admin-actions{display:flex;gap:8px}
-.admin-action-btn{flex:1;padding:10px;border-radius:10px;border:1px solid var(--bd2);color:var(--txt2);font-size:13px;transition:all .15s}
-.admin-action-btn:hover{background:var(--s2);color:var(--txt)}
-.danger-btn{border-color:rgba(224,82,82,.3)!important;color:var(--red)!important}
-.admin-section{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:8px}
-.section-head{display:flex;align-items:center;justify-content:space-between}
-.badge{background:var(--s2);border:1px solid var(--bd2);border-radius:20px;padding:2px 8px;font-size:11px;font-family:'DM Mono',monospace;color:var(--txt2)}
-.req-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--s2);border-radius:10px}
-.req-info{display:flex;flex-direction:column;gap:2px;min-width:0}
-.req-user{font-size:13px;font-weight:500}
-.req-uid{font-size:11px;color:var(--txt3);font-family:'DM Mono',monospace}
-.req-meta{font-size:11px;color:var(--txt3)}
-.req-txhash{font-size:10px;color:var(--txt3);font-family:'DM Mono',monospace;word-break:break-all}
-.req-wallet{font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;word-break:break-all}
-.req-actions{display:flex;gap:6px;flex-shrink:0}
-.req-approve,.req-reject{padding:6px 10px;border-radius:8px;font-size:13px;font-family:monospace;transition:all .15s;white-space:nowrap}
-.req-approve{background:rgba(62,201,123,.1);border:1px solid rgba(62,201,123,.25);color:var(--green)}
-.req-approve:hover:not(:disabled){background:rgba(62,201,123,.2)}
-.req-reject{background:rgba(224,82,82,.1);border:1px solid rgba(224,82,82,.25);color:var(--red)}
-.req-reject:hover:not(:disabled){background:rgba(224,82,82,.2)}
-.req-approve:disabled,.req-reject:disabled{opacity:.4;cursor:not-allowed}
-.user-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--s2);border-radius:10px}
-.user-info{display:flex;align-items:center;gap:10px;min-width:0}
-.user-emoji{font-size:20px}
-.user-info > div{min-width:0}
-.user-name-txt{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.user-bal{display:block;font-size:11px;color:var(--gold);font-family:'DM Mono',monospace}
-.user-actions{display:flex;gap:6px}
-.small-btn{padding:5px 10px;border-radius:7px;font-size:12px;border:1px solid var(--bd2);color:var(--txt2);transition:all .15s}
-.small-btn:hover{background:var(--s1);color:var(--txt)}
-.danger-sm{border-color:rgba(224,82,82,.3)!important;color:var(--red)!important}
-.overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
-.winner-card{background:var(--s1);border:1px solid var(--bd2);border-radius:22px;padding:32px 28px;text-align:center;max-width:300px;width:100%}
-.wc-trophy{font-size:52px;margin-bottom:12px;animation:trophy-pop .5s .1s cubic-bezier(.2, .8, .4, 1) both}
-@keyframes trophy-pop{from{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}
-.wc-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--txt3);margin-bottom:8px}
-.wc-name{font-size:22px;font-weight:600;margin-bottom:6px}
-.wc-prize{font-family:'DM Mono',monospace;font-size:22px;color:var(--gold);margin-bottom:8px}
-.wc-you{font-size:14px;color:var(--green);margin-bottom:18px}
-.wc-loss{font-size:13px;color:var(--red);margin-bottom:18px}
-.wc-close{width:100%;padding:13px;border-radius:11px;border:1px solid var(--bd2);color:var(--txt);font-size:14px;transition:background .15s;margin-top:6px}
-.wc-close:hover{background:var(--s2)}
-.modal-card{background:var(--s1);border:1px solid var(--bd2);border-radius:22px;padding:24px;max-width:360px;width:100%;max-height:90vh;overflow-y:auto}
-.modal-title{font-size:17px;font-weight:600;margin-bottom:18px;text-align:center}
-.modal-avail{font-size:12px;color:var(--txt2);text-align:center;margin-bottom:14px}
-.modal-steps{display:flex;align-items:center;margin-bottom:20px}
-.step{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--txt3);transition:color .2s}
-.step.active{color:var(--txt)}
-.step-num{width:20px;height:20px;border-radius:50%;background:var(--s2);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:10px;transition:all .2s}
-.step.active .step-num{background:var(--gold);border-color:transparent;color:#0d0d0f}
-.step-line{flex:1;height:1px;background:var(--bd);margin:0 8px}
-.deposit-info{background:var(--s2);border-radius:12px;padding:14px;margin-bottom:14px}
-.dep-row{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
-.dep-row:last-of-type{margin-bottom:0}
-.dep-lbl{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em}
-.dep-val{font-family:'DM Mono',monospace;font-size:16px}
-.dep-wallet-row{display:flex;align-items:center;gap:8px}
-.dep-wallet{font-family:'DM Mono',monospace;font-size:11px;color:var(--txt2);word-break:break-all;flex:1}
-.copy-small{width:28px;height:28px;flex-shrink:0;background:var(--s1);border:1px solid var(--bd2);border-radius:7px;font-size:13px;color:var(--txt2);display:flex;align-items:center;justify-content:center}
-.copy-small:hover{border-color:var(--gold);color:var(--gold)}
-.dep-note{font-size:11px;color:var(--gold);background:rgba(240,180,41,.08);border:1px solid rgba(240,180,41,.15);border-radius:9px;padding:10px 12px;margin-top:4px}
-.dep-confirm-info{font-size:13px;color:var(--txt2);margin-bottom:12px;text-align:center}
-.ton-connect-btn{width:100%;padding:13px;border-radius:11px;background:rgba(82,160,224,.12);border:1px solid rgba(82,160,224,.25);color:var(--blue);font-size:14px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:4px;transition:all .15s}
-.ton-connect-btn:hover{background:rgba(82,160,224,.2)}
-.preset-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
-.preset-btn{flex:1;min-width:50px;padding:9px 6px;border-radius:9px;border:1px solid var(--bd);font-size:13px;color:var(--txt2);transition:all .15s}
-.preset-btn.active{border-color:var(--gold);color:var(--gold);background:var(--gold-bg)}
-.preset-btn:hover:not(:disabled):not(.active){border-color:var(--bd2);color:var(--txt)}
-.preset-btn:disabled{opacity:.3;cursor:not-allowed}
-.modal-field{display:flex;align-items:center;background:var(--s2);border:1px solid var(--bd2);border-radius:11px;padding:12px 16px;margin-bottom:16px}
-.modal-input{flex:1;font-family:'DM Mono',monospace;font-size:15px;width:100%}
-.modal-cur{font-size:12px;color:var(--gold);margin-left:6px}
-.loading-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--txt2);margin-bottom:12px}
-.spinner-small{width:16px;height:16px;border-radius:50%;border:2px solid var(--bd2);border-top-color:var(--gold);animation:spin .7s linear infinite;flex-shrink:0}
-@keyframes spin{to{transform:rotate(360deg)}}
-.success-msg{text-align:center;color:var(--green);font-size:14px;padding:8px 0 16px}
-.modal-btns{display:flex;gap:10px}
-.modal-cancel{flex:1;padding:13px;border-radius:11px;border:1px solid var(--bd);color:var(--txt2);font-size:14px;transition:all .15s}
-.modal-cancel:hover{background:var(--s2);color:var(--txt)}
-.modal-confirm{flex:1;padding:13px;border-radius:11px;background:var(--gold);color:#0d0d0f;border:none;font-weight:600;font-size:14px;transition:opacity .15s}
-.modal-confirm:hover:not(:disabled){opacity:.88}
-.modal-confirm:disabled{opacity:.3;cursor:not-allowed}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--s2);border:1px solid var(--bd2);border-radius:30px;padding:10px 20px;font-size:13px;color:var(--txt);z-index:200;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-.fade-enter-active,.fade-leave-active{transition:opacity .25s, transform .25s;transition-timing-function:cubic-bezier(.2, .8, .4, 1)}
-.fade-enter-from, .fade-leave-to{opacity:0;transform:scale(.9)}
-.toast-anim-enter-active,.toast-anim-leave-active{transition:all .3s cubic-bezier(.2, .8, .4, 1)}
-.toast-anim-enter-from,.toast-anim-leave-to{opacity:0;transform:translateY(15px) translateX(-50%)}
-.gold{color:var(--gold)}.green{color:var(--green)}
-@media(max-width:380px){.pstats{grid-template-columns:repeat(2,1fr)}.admin-stats{grid-template-columns:repeat(2,1fr)}}
+<style>
+/* ═══════════════════════════════════════
+   FONTS & ROOT
+═══════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #08080f;
+  --bg2:      #0f0f1a;
+  --bg3:      #151525;
+  --border:   #ffffff0f;
+  --border2:  #ffffff18;
+  --text:     #e8e8f0;
+  --text2:    #8888aa;
+  --gold:     #f5c842;
+  --gold2:    #ffd97d;
+  --green:    #2ecc71;
+  --red:      #e74c3c;
+  --blue:     #3498db;
+  --accent:   #7c5cff;
+  --accent2:  #a07cff;
+  --radius:   14px;
+  --r-sm:     8px;
+  --shadow:   0 8px 32px #0007;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; overflow-x: hidden; }
+
+/* ═══════════════════════════════════════
+   SPLASH
+═══════════════════════════════════════ */
+.splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.splash-bg { position: absolute; inset: 0; }
+.splash-grid {
+  position: absolute; inset: 0;
+  background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.splash-orb {
+  position: absolute; border-radius: 50%; filter: blur(80px); animation: orbFloat 6s ease-in-out infinite;
+}
+.splash-orb--1 { width: 400px; height: 400px; background: radial-gradient(#7c5cff55, transparent); top: -100px; right: -100px; }
+.splash-orb--2 { width: 300px; height: 300px; background: radial-gradient(#f5c84255, transparent); bottom: -50px; left: -50px; animation-delay: -3s; }
+@keyframes orbFloat { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-20px) scale(1.05); } }
+
+.splash-content { position: relative; text-align: center; z-index: 1; }
+.splash-logo { display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; }
+.logo-icon {
+  width: 80px; height: 80px; border-radius: 24px;
+  background: linear-gradient(135deg, #7c5cff, #f5c842);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 16px;
+  box-shadow: 0 0 40px #7c5cff55, 0 0 80px #f5c84222;
+  animation: logoPulse 2s ease-in-out infinite;
+}
+@keyframes logoPulse { 0%,100% { box-shadow: 0 0 40px #7c5cff55, 0 0 80px #f5c84222; } 50% { box-shadow: 0 0 60px #7c5cff88, 0 0 100px #f5c84244; } }
+.logo-diamond { font-size: 36px; color: #fff; }
+.splash-title { font-size: 48px; font-weight: 800; line-height: 1; letter-spacing: -2px; color: #fff; }
+.splash-title--accent { color: var(--gold); }
+.splash-sub { font-size: 14px; color: var(--text2); letter-spacing: 4px; text-transform: uppercase; margin-bottom: 40px; font-weight: 600; }
+.splash-btn {
+  position: relative; padding: 16px 48px; font-size: 16px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), #5c3cdd);
+  color: #fff; border: none; border-radius: 50px; cursor: pointer;
+  overflow: hidden; letter-spacing: 1px;
+  box-shadow: 0 4px 30px #7c5cff55;
+  transition: transform 0.2s, box-shadow 0.2s;
+  font-family: 'Syne', sans-serif;
+}
+.splash-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 40px #7c5cff77; }
+.btn-shine {
+  position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, #ffffff30, transparent);
+  animation: shine 2.5s ease-in-out infinite;
+}
+@keyframes shine { 0% { left: -100%; } 60%,100% { left: 150%; } }
+
+/* ═══════════════════════════════════════
+   MAIN APP
+═══════════════════════════════════════ */
+.app { min-height: 100vh; }
+.main { min-height: 100vh; display: flex; flex-direction: column; max-width: 480px; margin: 0 auto; }
+
+/* ── HEADER ── */
+.hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: blur(12px);
+}
+.hdr-user { display: flex; align-items: center; gap: 10px; }
+.hdr-avatar {
+  width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--gold));
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.hdr-name { font-weight: 700; font-size: 15px; }
+.hdr-handle { color: var(--text2); font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+.hdr-balance {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 50px; padding: 6px 6px 6px 14px; cursor: pointer;
+  transition: border-color 0.2s;
+}
+.hdr-balance:hover { border-color: var(--gold); }
+.hdr-bal-inner { display: flex; align-items: baseline; gap: 4px; }
+.hdr-bal-num { font-weight: 700; font-size: 15px; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+.hdr-bal-cur { font-size: 11px; color: var(--text2); font-weight: 600; }
+.hdr-bal-add {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: #fff; font-weight: 700; line-height: 1;
+}
+
+/* ── NAV ── */
+.nav {
+  display: flex; background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 0 16px; position: relative;
+}
+.nav-btn {
+  flex: 1; padding: 12px 8px; background: none; border: none; cursor: pointer;
+  color: var(--text2); font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: color 0.2s; font-family: 'Syne', sans-serif;
+  position: relative;
+}
+.nav-btn.active { color: var(--text); }
+.nav-btn.active::after {
+  content: ''; position: absolute; bottom: 0; left: 20%; right: 20%; height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+  border-radius: 2px 2px 0 0;
+}
+.nav-icon { font-size: 14px; }
+
+/* ── CONNECTION ── */
+.conn-banner {
+  background: #e74c3c20; border-bottom: 1px solid #e74c3c40;
+  color: var(--red); padding: 8px 16px; font-size: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.conn-pulse {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ── TABS ── */
+.tab { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ── STATS ROW ── */
+.stats-row { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 8px; }
+.stat-box {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 10px; text-align: center; display: flex; flex-direction: column; gap: 4px;
+}
+.stat-box--main {
+  background: linear-gradient(135deg, #1a1a2a, #1f1f35);
+  border-color: #f5c84230;
+}
+.stat-val { font-size: 22px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.stat-val.gold { color: var(--gold); }
+.stat-val.danger { color: var(--red); animation: blink 0.5s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.stat-lbl { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ── TIMER ── */
+.timer-track {
+  height: 4px; background: var(--bg3); border-radius: 4px; overflow: hidden;
+}
+.timer-fill {
+  height: 100%; background: linear-gradient(90deg, var(--accent), var(--gold));
+  border-radius: 4px;
+}
+.timer-fill.danger { background: linear-gradient(90deg, #c0392b, var(--red)); }
+
+/* ─────────────────────────────────────
+   BLOCK ROULETTE
+───────────────────────────────────── */
+.roulette-section {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); overflow: hidden;
+}
+.roulette-label {
+  padding: 10px 16px; font-size: 12px; color: var(--text2);
+  text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.spinning-text {
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  animation: textShimmer 1s ease-in-out infinite;
+}
+@keyframes textShimmer { 0%,100%{opacity:1} 50%{opacity:0.7} }
+
+.roulette-viewport {
+  position: relative; height: 100px; overflow: hidden;
+  background: linear-gradient(180deg, #0a0a14, #0f0f1e);
+}
+.roulette-track {
+  display: flex; align-items: center; height: 100%;
+  will-change: transform;
+}
+.roulette-block {
+  flex-shrink: 0; height: 80px; border-radius: 10px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; margin: 0 3px; min-width: 60px;
+  border: 1px solid #ffffff15;
+  transition: box-shadow 0.3s;
+}
+.roulette-block--winner {
+  box-shadow: 0 0 20px currentColor, 0 0 40px currentColor;
+  border-color: #ffffff55;
+  animation: winnerPulse 0.4s ease-in-out infinite;
+}
+@keyframes winnerPulse { 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(1.05)} }
+.block-emoji { font-size: 20px; }
+.block-name { font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.5px; text-transform: uppercase; }
+.block-bet { font-size: 9px; color: rgba(255,255,255,0.7); font-family: 'JetBrains Mono', monospace; }
+
+.roulette-pointer {
+  position: absolute; left: 50%; transform: translateX(-50%); top: 0; bottom: 0;
+  display: flex; flex-direction: column; align-items: center; z-index: 5;
+  pointer-events: none;
+}
+.pointer-top { color: var(--gold); font-size: 16px; line-height: 1; margin-bottom: -1px; }
+.pointer-line { width: 2px; flex: 1; background: linear-gradient(180deg, var(--gold), transparent); }
+
+.roulette-fade {
+  position: absolute; top: 0; bottom: 0; width: 80px; z-index: 4; pointer-events: none;
+}
+.roulette-fade--left { left: 0; background: linear-gradient(90deg, var(--bg2), transparent); }
+.roulette-fade--right { right: 0; background: linear-gradient(-90deg, var(--bg2), transparent); }
+
+/* ── BET CARD ── */
+.bet-card {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 18px;
+}
+.bet-card-title { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text2); margin-bottom: 14px; font-weight: 600; }
+.bet-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.adj-btn {
+  width: 42px; height: 42px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); font-size: 22px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-weight: 700; transition: background 0.2s, border-color 0.2s;
+  font-family: 'Syne', sans-serif;
+}
+.adj-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+.adj-btn:disabled { opacity: 0.3; cursor: default; }
+.bet-field { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r-sm); padding: 8px 14px; }
+.bet-input {
+  flex: 1; background: none; border: none; outline: none; color: var(--text);
+  font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+  width: 100%; min-width: 0;
+}
+.bet-input::-webkit-inner-spin-button, .bet-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+.bet-cur { font-size: 13px; color: var(--text2); font-weight: 600; }
+
+.quick-row { display: flex; gap: 6px; margin-bottom: 14px; }
+.quick-btn {
+  flex: 1; padding: 8px 4px; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s; font-family: 'Syne', sans-serif;
+}
+.quick-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.quick-btn:disabled { opacity: 0.3; cursor: default; }
+.quick-btn--max { background: linear-gradient(135deg, #2a1a4a, #1a1a3a); border-color: var(--accent); color: var(--accent2); }
+
+.place-btn {
+  width: 100%; padding: 16px; font-size: 16px; font-weight: 700;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: var(--radius); color: var(--text2); cursor: not-allowed;
+  transition: all 0.2s; position: relative; overflow: hidden;
+  font-family: 'Syne', sans-serif; letter-spacing: 0.5px;
+}
+.place-btn--active {
+  background: linear-gradient(135deg, var(--accent), #5c3cdd);
+  border-color: var(--accent); color: #fff; cursor: pointer;
+  box-shadow: 0 4px 20px #7c5cff40;
+}
+.place-btn--active:hover { transform: translateY(-1px); box-shadow: 0 6px 30px #7c5cff60; }
+.place-btn--done {
+  background: linear-gradient(135deg, #1a3a2a, #0f2a1a);
+  border-color: var(--green); color: var(--green); cursor: default;
+}
+.place-btn-shine {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 30%, #ffffff15 50%, transparent 70%);
+  animation: btnShine 3s ease-in-out infinite;
+}
+@keyframes btnShine { 0%,100%{transform:translateX(-100%)} 50%{transform:translateX(100%)} }
+
+.bet-error { margin-top: 10px; color: var(--red); font-size: 13px; text-align: center; }
+
+/* ── PLAYERS ── */
+.players-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px;
+}
+.players-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.card-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.players-badge {
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  border-radius: 50px; padding: 2px 8px; min-width: 24px; text-align: center;
+}
+.empty-msg { color: var(--text2); font-size: 14px; text-align: center; padding: 20px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.empty-icon { font-size: 32px; }
+
+.players-list { display: flex; flex-direction: column; gap: 8px; }
+.player-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg3); border-radius: var(--r-sm);
+  padding: 10px 12px; border: 1px solid var(--border);
+}
+.player-color { width: 4px; height: 36px; border-radius: 4px; flex-shrink: 0; }
+.pr-emoji { font-size: 20px; }
+.pr-name { flex: 1; font-size: 14px; font-weight: 600; }
+.pr-me { color: var(--gold); }
+.pr-you { font-size: 10px; background: var(--gold); color: #000; border-radius: 4px; padding: 1px 5px; margin-left: 6px; font-weight: 700; vertical-align: middle; }
+.pr-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.pr-chance { font-size: 12px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+.pr-bet { font-size: 14px; font-weight: 700; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+
+/* ═══════════════════════════════════════
+   PROFILE TAB
+═══════════════════════════════════════ */
+.profile-hero {
+  background: linear-gradient(135deg, #0f0f2a, #1a1a3a);
+  border: 1px solid var(--border2); border-radius: var(--radius);
+  padding: 28px; text-align: center;
+}
+.profile-avatar {
+  width: 70px; height: 70px; border-radius: 50%; margin: 0 auto 12px;
+  background: linear-gradient(135deg, var(--accent), var(--gold));
+  display: flex; align-items: center; justify-content: center; font-size: 34px;
+  box-shadow: 0 0 30px #7c5cff40;
+}
+.profile-name { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+.profile-handle { color: var(--text2); font-size: 13px; font-family: 'JetBrains Mono', monospace; margin-bottom: 14px; }
+.profile-balance { display: flex; align-items: baseline; gap: 6px; justify-content: center; }
+.profile-bal-num { font-size: 36px; font-weight: 800; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+.profile-bal-cur { font-size: 14px; color: var(--text2); }
+
+.pstats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.pstat {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 8px; text-align: center; display: flex; flex-direction: column; gap: 4px;
+}
+.pstat-val { font-size: 18px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.pstat-val.gold { color: var(--gold); }
+.pstat-lbl { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.fin-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fin-btn {
+  padding: 16px; border-radius: var(--radius); border: 1px solid transparent;
+  font-size: 15px; font-weight: 700; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; gap: 8px;
+  transition: all 0.2s; font-family: 'Syne', sans-serif;
+}
+.fin-btn--deposit {
+  background: linear-gradient(135deg, #1a2a1a, #0f1f0f);
+  border-color: var(--green); color: var(--green);
+}
+.fin-btn--deposit:hover { background: var(--green); color: #000; }
+.fin-btn--withdraw {
+  background: linear-gradient(135deg, #2a1a1a, #1f0f0f);
+  border-color: var(--red); color: var(--red);
+}
+.fin-btn--withdraw:hover:not(:disabled) { background: var(--red); color: #fff; }
+.fin-btn:disabled { opacity: 0.3; cursor: default; }
+.fin-icon { font-weight: 700; }
+
+.ref-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px;
+}
+.ref-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.ref-bonus { font-size: 12px; color: var(--gold); background: #f5c84215; border: 1px solid #f5c84230; border-radius: 50px; padding: 3px 10px; }
+.ref-row { display: flex; gap: 8px; }
+.ref-input {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 10px 12px; color: var(--text2); font-size: 12px;
+  font-family: 'JetBrains Mono', monospace; outline: none;
+}
+.copy-btn {
+  width: 42px; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r-sm);
+  color: var(--text); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.2s;
+}
+.copy-btn:hover { border-color: var(--accent); }
+
+.history-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px;
+}
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; background: var(--bg3); border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+}
+.hist-left { display: flex; align-items: center; gap: 10px; }
+.hist-pill { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 50px; letter-spacing: 1px; }
+.hist-pill.win { background: #2ecc7120; color: var(--green); border: 1px solid #2ecc7140; }
+.hist-pill.loss { background: #e74c3c20; color: var(--red); border: 1px solid #e74c3c40; }
+.hist-time { font-size: 12px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+.hist-amount { font-weight: 700; font-size: 14px; font-family: 'JetBrains Mono', monospace; }
+.hist-amount.win { color: var(--green); }
+.hist-amount.loss { color: var(--red); }
+
+/* ═══════════════════════════════════════
+   ADMIN TAB
+═══════════════════════════════════════ */
+.admin-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
+.astat { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px 8px; text-align: center; display: flex; flex-direction: column; gap: 4px; }
+.astat-val { font-size: 16px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.astat-val.gold { color: var(--gold); }
+.astat-val.green { color: var(--green); }
+.astat-lbl { font-size: 9px; color: var(--text2); text-transform: uppercase; }
+
+.admin-actions { display: flex; gap: 8px; }
+.admin-action-btn {
+  flex: 1; padding: 12px; background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--r-sm); color: var(--text); cursor: pointer; font-weight: 600;
+  transition: all 0.2s; font-family: 'Syne', sans-serif;
+}
+.admin-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+.admin-action-btn--danger { border-color: var(--red); color: var(--red); }
+.admin-action-btn--danger:hover { background: var(--red); color: #fff; }
+
+.admin-section { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.badge { background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; border-radius: 50px; padding: 2px 8px; }
+.req-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.req-row:last-child { border-bottom: none; }
+.req-info { display: flex; flex-direction: column; gap: 3px; }
+.req-user { font-size: 13px; font-weight: 600; }
+.req-meta { font-size: 11px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+.req-wallet { font-size: 11px; color: var(--accent2); font-family: 'JetBrains Mono', monospace; }
+.req-status { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+.req-status.pending { color: var(--gold); }
+.req-status.completed { color: var(--green); }
+.req-status.approved { color: var(--green); }
+.req-status.rejected { color: var(--red); }
+.req-actions { display: flex; gap: 6px; }
+.req-approve, .req-reject {
+  padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 700; font-family: 'Syne', sans-serif;
+}
+.req-approve { background: #2ecc7120; color: var(--green); border: 1px solid #2ecc7140; }
+.req-approve:hover:not(:disabled) { background: var(--green); color: #000; }
+.req-reject { background: #e74c3c20; color: var(--red); border: 1px solid #e74c3c40; }
+.req-reject:hover:not(:disabled) { background: var(--red); color: #fff; }
+
+.user-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.user-row:last-child { border-bottom: none; }
+.user-info { display: flex; align-items: center; gap: 10px; }
+.user-emoji { font-size: 24px; }
+.user-name-txt { display: block; font-size: 13px; font-weight: 600; }
+.user-bal { display: block; font-size: 11px; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+.user-actions { display: flex; gap: 6px; }
+.small-btn {
+  padding: 6px 12px; border-radius: 6px; background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Syne', sans-serif;
+  transition: all 0.2s;
+}
+.small-btn:hover { border-color: var(--accent); color: var(--accent); }
+.small-btn--danger { border-color: var(--red); color: var(--red); }
+
+/* ═══════════════════════════════════════
+   OVERLAYS & MODALS
+═══════════════════════════════════════ */
+.overlay {
+  position: fixed; inset: 0; background: #000a; z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  backdrop-filter: blur(6px);
+}
+
+/* ── WINNER CARD ── */
+.winner-card {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 24px; padding: 36px 28px; text-align: center;
+  position: relative; overflow: hidden; max-width: 300px; width: 100%;
+  box-shadow: 0 20px 80px #0009;
+}
+.winner-bg-glow {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, #f5c84215, transparent 60%);
+  pointer-events: none;
+}
+.wc-trophy { font-size: 64px; animation: trophyBounce 0.6s ease-out; margin-bottom: 8px; }
+@keyframes trophyBounce { 0%{transform:scale(0) rotate(-10deg)} 60%{transform:scale(1.2) rotate(5deg)} 100%{transform:scale(1) rotate(0deg)} }
+.wc-label { font-size: 12px; text-transform: uppercase; letter-spacing: 3px; color: var(--text2); margin-bottom: 6px; }
+.wc-name { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
+.wc-prize { font-size: 32px; font-weight: 800; color: var(--gold); font-family: 'JetBrains Mono', monospace; margin-bottom: 12px; }
+.wc-you { font-size: 18px; color: var(--green); margin-bottom: 16px; font-weight: 700; }
+.wc-loss { font-size: 16px; color: var(--red); margin-bottom: 16px; font-family: 'JetBrains Mono', monospace; }
+.wc-close {
+  width: 100%; padding: 14px; background: linear-gradient(135deg, var(--accent), #5c3cdd);
+  border: none; border-radius: var(--radius); color: #fff; font-size: 15px; font-weight: 700;
+  cursor: pointer; font-family: 'Syne', sans-serif; letter-spacing: 0.5px;
+}
+
+/* ── MODAL CARD ── */
+.modal-card {
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 20px; padding: 24px; max-width: 360px; width: 100%;
+  box-shadow: 0 20px 80px #0009;
+  max-height: 85vh; overflow-y: auto;
+}
+.modal-title { font-size: 20px; font-weight: 800; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+.modal-icon { font-size: 22px; }
+.modal-avail { font-size: 14px; color: var(--text2); margin-bottom: 16px; }
+
+.preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.preset-btn {
+  flex: 1; min-width: 44px; padding: 10px 8px; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text); font-size: 14px; font-weight: 700;
+  cursor: pointer; transition: all 0.2s; font-family: 'Syne', sans-serif;
+}
+.preset-btn:disabled { opacity: 0.3; cursor: default; }
+.preset-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.preset-btn:hover:not(:disabled):not(.active) { border-color: var(--accent); }
+
+.modal-field {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r-sm);
+  padding: 10px 14px; margin-bottom: 14px;
+}
+.modal-input {
+  flex: 1; background: none; border: none; outline: none; color: var(--text);
+  font-size: 18px; font-weight: 600; font-family: 'JetBrains Mono', monospace; min-width: 0;
+}
+.modal-cur { font-size: 13px; color: var(--text2); font-weight: 600; }
+.modal-btns { display: flex; gap: 10px; margin-top: 16px; }
+.modal-cancel {
+  flex: 1; padding: 13px; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text2); cursor: pointer; font-weight: 600;
+  font-family: 'Syne', sans-serif;
+}
+.modal-confirm {
+  flex: 1; padding: 13px; background: linear-gradient(135deg, var(--accent), #5c3cdd);
+  border: none; border-radius: var(--r-sm); color: #fff; cursor: pointer; font-weight: 700;
+  font-family: 'Syne', sans-serif; transition: opacity 0.2s;
+}
+.modal-confirm:disabled { opacity: 0.4; cursor: default; }
+
+.deposit-info { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.dep-row { display: flex; flex-direction: column; gap: 4px; }
+.dep-lbl { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.dep-val { font-size: 22px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.dep-wallet-row { display: flex; align-items: center; gap: 8px; background: var(--bg3); border-radius: var(--r-sm); padding: 8px 10px; border: 1px solid var(--border); }
+.dep-wallet { flex: 1; font-size: 12px; font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+.dep-wallet-row.highlight { border-color: var(--gold); }
+.copy-small { background: none; border: none; cursor: pointer; font-size: 16px; padding: 2px; }
+.dep-note { font-size: 12px; color: var(--text2); background: #ffffff08; border-radius: var(--r-sm); padding: 10px 12px; border-left: 3px solid var(--gold); }
+.red { color: var(--red); }
+
+.ton-connect-btn {
+  width: 100%; padding: 14px; background: linear-gradient(135deg, #0088cc, #005fa3);
+  border: none; border-radius: var(--r-sm); color: #fff; font-size: 16px; font-weight: 700;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-bottom: 4px; font-family: 'Syne', sans-serif;
+}
+
+.waiting-message { text-align: center; padding: 20px 0; }
+.spinner-large {
+  width: 48px; height: 48px; border: 3px solid var(--border2); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.status-text { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.status-hint { font-size: 12px; color: var(--text2); line-height: 1.5; }
+.success-message { text-align: center; padding: 20px 0; }
+.success-icon { font-size: 48px; margin-bottom: 12px; }
+.success-text { font-size: 18px; font-weight: 700; color: var(--green); margin-bottom: 6px; }
+.success-sub { font-size: 14px; color: var(--text2); }
+
+.loading-row { display: flex; align-items: center; gap: 10px; color: var(--text2); font-size: 14px; margin-top: 10px; }
+.spinner-small { width: 16px; height: 16px; border: 2px solid var(--border2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.success-msg { color: var(--green); font-size: 14px; margin-top: 10px; }
+.error-message { color: var(--red); font-size: 12px; margin-bottom: 10px; }
+
+/* ── TOAST ── */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg2); border: 1px solid var(--border2);
+  color: var(--text); font-size: 14px; font-weight: 600;
+  padding: 12px 24px; border-radius: 50px;
+  box-shadow: 0 8px 32px #0008; z-index: 200;
+  white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════
+   TRANSITIONS
+═══════════════════════════════════════ */
+.winner-anim-enter-active { animation: winnerIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.winner-anim-leave-active { animation: winnerIn 0.2s ease-in reverse; }
+@keyframes winnerIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+
+.modal-anim-enter-active { animation: modalIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.modal-anim-leave-active { animation: modalIn 0.2s ease-in reverse; }
+@keyframes modalIn { from { opacity: 0; transform: translateY(30px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+.toast-anim-enter-active { animation: toastIn 0.3s ease-out; }
+.toast-anim-leave-active { animation: toastIn 0.2s ease-in reverse; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+/* ── GLOBAL ── */
+.gold { color: var(--gold); }
+.green { color: var(--green); }
+.win { color: var(--green); }
+.loss { color: var(--red); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
 </style>
