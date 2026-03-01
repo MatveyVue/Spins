@@ -692,6 +692,7 @@ export default {
           this.startGameTimer();
         } 
         else if (newStatus === 'spinning' && oldStatus === 'waiting') {
+          this.isSpinning = true;
           this.clearGameTimer();
           
           if (this._newRoundTimer) clearTimeout(this._newRoundTimer);
@@ -1361,14 +1362,20 @@ export default {
     async processReferral(newUserId, referrerId) {
       if (!referrerId || referrerId === newUserId) return;
 
+      console.log(`Processing referral: ${referrerId} referred ${newUserId}`);
+
       try {
         await runTransaction(db, async (transaction) => {
+          // Начисляем бонус рефереру
           const referrerRef = doc(db, 'users', referrerId);
           const referrerSnap = await transaction.get(referrerRef);
 
-          if (!referrerSnap.exists()) return;
+          if (!referrerSnap.exists()) {
+            console.log('Referrer not found');
+            return;
+          }
 
-          const beforeBalance = referrerSnap.data().balance || 0;
+          const beforeReferrerBalance = referrerSnap.data().balance || 0;
 
           transaction.update(referrerRef, {
             balance: increment(REFERRAL_BONUS),
@@ -1376,6 +1383,7 @@ export default {
             'stats.referralEarned': increment(REFERRAL_BONUS)
           });
 
+          // Добавляем запись в историю реферера
           const referralHistoryRef = doc(collection(db, 'users', referrerId, 'referrals'));
           transaction.set(referralHistoryRef, {
             userId: newUserId,
@@ -1383,23 +1391,51 @@ export default {
             ts: serverTimestamp()
           });
 
+          // Начисляем бонус новому пользователю
           const newUserRef = doc(db, 'users', newUserId);
+          const newUserSnap = await transaction.get(newUserRef);
+          
+          if (!newUserSnap.exists()) {
+            console.log('New user not found');
+            return;
+          }
+
+          const beforeNewBalance = newUserSnap.data().balance || 0;
+
           transaction.update(newUserRef, {
+            balance: increment(REFERRAL_BONUS),
             referredBy: referrerId
           });
-          
-          this.logBalanceOperation('referral_bonus', referrerId, REFERRAL_BONUS, beforeBalance, beforeBalance + REFERRAL_BONUS, { newUserId });
+
+          // Логируем операции
+          this.logBalanceOperation('referral_bonus_referrer', referrerId, REFERRAL_BONUS, beforeReferrerBalance, beforeReferrerBalance + REFERRAL_BONUS, { newUserId });
+          this.logBalanceOperation('referral_bonus_new', newUserId, REFERRAL_BONUS, beforeNewBalance, beforeNewBalance + REFERRAL_BONUS, { referrerId });
         });
 
+        // Добавляем записи в историю обоим пользователям
         await addDoc(collection(db, 'users', referrerId, 'history'), {
           type: 'referral_bonus',
           amount: REFERRAL_BONUS,
-          description: 'Referral bonus',
+          description: `Referral bonus for inviting user`,
           ts: serverTimestamp()
         });
 
-        console.log(`✅ Referral bonus ${REFERRAL_BONUS} TON sent to ${referrerId}`);
-        this.showToast(`🎁 +${REFERRAL_BONUS} TON referral bonus!`);
+        await addDoc(collection(db, 'users', newUserId, 'history'), {
+          type: 'referral_bonus',
+          amount: REFERRAL_BONUS,
+          description: `Welcome bonus from referral`,
+          ts: serverTimestamp()
+        });
+
+        console.log(`✅ Referral bonuses ${REFERRAL_BONUS} TON sent to both users`);
+        
+        // Показываем уведомление только текущему пользователю
+        if (this.user?.id === newUserId) {
+          this.showToast(`🎁 +${REFERRAL_BONUS} TON welcome bonus!`);
+        } else if (this.user?.id === referrerId) {
+          this.showToast(`🎁 +${REFERRAL_BONUS} TON referral bonus!`);
+        }
+        
       } catch (e) {
         console.error('Error processing referral:', e);
       }
@@ -1408,6 +1444,8 @@ export default {
     // ── BLOCK ROULETTE ──
     startBlockSpin(winnerData) {
       if (!this.game?.players?.length || !winnerData) return;
+      
+      console.log('Starting block spin with winner:', winnerData);
       
       const total = this.game.totalBet || 1;
       const viewportCenter = 150;
@@ -1430,6 +1468,7 @@ export default {
         const strip = this.$refs?.rouletteStrip;
         if (strip) {
           strip.style.transition = `transform ${SPIN_DURATION/1000}s cubic-bezier(0.1, 0.7, 0.3, 1)`;
+          strip.style.transform = `translateX(${-offsetToWinner}px)`;
           this.stripOffset = -offsetToWinner;
         }
       });
@@ -1482,12 +1521,14 @@ export default {
       this.user = ud;
 
       const referrerId = this.getRefFromStartParam();
+      console.log('Login with referrer:', referrerId);
 
       try {
         const ref = doc(db, 'users', ud.id);
         const snap = await getDoc(ref);
 
         if (!snap.exists()) {
+          // Новый пользователь
           await runTransaction(db, async (t) => {
             t.set(ref, {
               name: ud.name,
@@ -1509,15 +1550,22 @@ export default {
             }, { merge: true });
           });
 
+          // Обрабатываем реферала ТОЛЬКО для нового пользователя
           if (referrerId) {
             await this.processReferral(ud.id, referrerId);
-            this.showToast(`🎁 You were referred! +${REFERRAL_BONUS} TON bonus for referrer!`);
           } else {
             this.showToast('👋 Welcome! Deposit TON to start playing');
           }
         } else {
+          // Существующий пользователь
           await updateDoc(ref, { lastSeen: serverTimestamp() });
           if (snap.data().emoji) this.user.emoji = snap.data().emoji;
+          
+          // Проверяем, есть ли у него реферер в данных
+          const userData = snap.data();
+          if (userData.referredBy) {
+            console.log('User was referred by:', userData.referredBy);
+          }
         }
         
         this.listenToUser();
@@ -1606,6 +1654,7 @@ export default {
           }
 
           if (ng.status === 'spinning' && prev !== 'spinning') {
+            console.log('Game spinning detected, starting animation');
             this.isSpinning = true;
             this.stopTimer();
             this.clearGameTimer();
@@ -1618,6 +1667,7 @@ export default {
             });
             
           } else if (ng.status === 'waiting' && prev !== 'waiting') {
+            console.log('Game waiting');
             this.isSpinning = false;
             this.winnerOverlay = null;
             this.game = ng;
@@ -1627,6 +1677,7 @@ export default {
             });
             
           } else if (ng.status === 'waiting_for_players' && prev !== 'waiting_for_players') {
+            console.log('Game waiting for players');
             this.isSpinning = false;
             this.winnerOverlay = null;
             this.timeLeft = ROUND_TIME;
@@ -1777,6 +1828,7 @@ export default {
             return;
           }
           
+          // Начисляем приз победителю
           const winnerRef = doc(db, 'users', winner.userId);
           const winnerSnap = await t.get(winnerRef);
           const beforeWinnerBalance = winnerSnap.data()?.balance || 0;
@@ -1789,6 +1841,7 @@ export default {
           
           this.logBalanceOperation('win', winner.userId, winner.prize, beforeWinnerBalance, beforeWinnerBalance + winner.prize, { roundId: gameData.roundId });
 
+          // Обновляем статистику для всех игроков
           if (winner.players) {
             for (const player of winner.players) {
               if (player && player.userId) {
@@ -1800,6 +1853,7 @@ export default {
             }
           }
 
+          // Начисляем комиссию админу
           const adminQuery = query(collection(db, 'users'), where('handle', '==', ADMIN_HANDLE));
           const adminSnap = await getDocs(adminQuery);
           if (!adminSnap.empty) {
@@ -1815,6 +1869,7 @@ export default {
             this.logBalanceOperation('commission', ADMIN_HANDLE, winner.commission || 0, beforeAdminBalance, beforeAdminBalance + (winner.commission || 0), { roundId: gameData.roundId });
           }
 
+          // Сохраняем игру в архив
           const gameArchiveRef = doc(collection(db, 'games'));
           t.set(gameArchiveRef, {
             roundId: gameData.roundId,
@@ -1830,11 +1885,13 @@ export default {
             endedAt: serverTimestamp()
           });
           
+          // Отмечаем, что приз начислен
           t.update(gameRef, {
             prizeAwarded: true
           });
         });
 
+        // Добавляем запись в историю победителя
         await addDoc(collection(db, 'users', winner.userId, 'history'), {
           type: 'win',
           amount: winner.prize,
@@ -1858,6 +1915,9 @@ export default {
       const isMe = w.userId === this.user?.id;
       const myBet = this.game?.players?.find(p => p.userId === this.user?.id);
       
+      console.log('Showing winner overlay:', w);
+      
+      // Начисляем выигрыш ТОЛЬКО когда показываем оверлей
       if (this.game?.winner && !this.game.prizeAwarded) {
         this.awardPrizeAfterSpin(this.game, this.game.winner);
       }
