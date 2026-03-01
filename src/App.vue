@@ -491,9 +491,9 @@ const ROUND_TIME = 30;
 const HOUSE_FEE = 0.05;
 const MIN_PLAYERS = 2;
 const HOUSE_WALLET = 'UQCH_BLQPJtnfj75s3YBu3bmaUTlRi6_I7difhNqINwrRC0i';
-const SPIN_DURATION = 8000;
-const SPIN_SETTLE_DURATION = 2000;
-const TRACK_REPEAT = 4;
+const SPIN_DURATION = 12000; // Увеличено до 12 секунд для более плавной прокрутки
+const SPIN_SETTLE_DURATION = 3000;
+const TRACK_REPEAT = 6; // Увеличено для более длинной прокрутки
 const REFERRAL_BONUS = 0.2;
 const ADMIN_HANDLE = 'whsxg';
 const MAX_RETRIES = 3;
@@ -605,6 +605,7 @@ export default {
       _retryCount: 0,
       _newRoundTimer: null,
       _spinAnimationTimer: null,
+      _prizeAwardedForRound: null, // Для отслеживания начисленных призов
       
       // TON Center related
       lastTxCheck: null,
@@ -790,7 +791,7 @@ export default {
       console.log(`Total bet: ${total}, Players: ${this.game.players.length}`);
       
       const base = this.game.players.map((p, i) => {
-        const width = Math.max(60, Math.min(400, Math.round((p.bet / total) * 400)));
+        const width = Math.max(80, Math.min(600, Math.round((p.bet / total) * 600)));
         
         return {
           userId: p.userId,
@@ -836,6 +837,7 @@ export default {
       this.winnerOverlay = null;
       this.stripOffset = 0;
       if (this.game) this.game.prizeAwarded = false;
+      this._prizeAwardedForRound = null;
       this.clearRouletteBlocks();
       this.stopTimer();
       this.clearGameTimer();
@@ -954,9 +956,15 @@ export default {
             if (gameData.players && gameData.players.length > 0) {
               for (const player of gameData.players) {
                 if (player && player.userId) {
-                  t.update(doc(db, 'users', player.userId), {
+                  const userRef = doc(db, 'users', player.userId);
+                  const userSnap = await t.get(userRef);
+                  const beforeBalance = userSnap.data()?.balance || 0;
+                  
+                  t.update(userRef, {
                     balance: increment(player.bet || 0)
                   });
+                  
+                  this.logBalanceOperation('force_refund', player.userId, player.bet || 0, beforeBalance, beforeBalance + (player.bet || 0), { reason: 'force_next_round' });
                 }
               }
             }
@@ -1345,66 +1353,87 @@ export default {
       }
     },
 
+    // ==================== ИСПРАВЛЕННАЯ РЕФЕРАЛЬНАЯ СИСТЕМА ====================
+    
     getRefFromStartParam() {
       try {
+        // Проверяем оба варианта: start и startapp
         const params = new URLSearchParams(window.location.search);
         let startParam = params.get('start') || params.get('startapp');
         
+        console.log('Start param from URL:', startParam);
+        
         if (startParam && startParam.startsWith('ref_')) {
-          return startParam.replace('ref_', '');
+          const referrerId = startParam.replace('ref_', '');
+          console.log('Found referrer ID:', referrerId);
+          return referrerId;
         }
         return null;
-      } catch {
+      } catch (error) {
+        console.error('Error parsing start param:', error);
         return null;
       }
     },
 
     async processReferral(newUserId, referrerId) {
-      if (!referrerId || referrerId === newUserId) return;
+      if (!referrerId || referrerId === newUserId) {
+        console.log('Invalid referral:', { newUserId, referrerId });
+        return;
+      }
 
-      console.log(`Processing referral: ${referrerId} referred ${newUserId}`);
+      console.log(`Processing referral: ${referrerId} -> ${newUserId}`);
 
       try {
-        await runTransaction(db, async (transaction) => {
-          // Начисляем бонус рефереру
-          const referrerRef = doc(db, 'users', referrerId);
-          const referrerSnap = await transaction.get(referrerRef);
+        // Проверяем, существует ли реферер
+        const referrerRef = doc(db, 'users', referrerId);
+        const referrerSnap = await getDoc(referrerRef);
 
-          if (!referrerSnap.exists()) {
-            console.log('Referrer not found');
-            return;
+        if (!referrerSnap.exists()) {
+          console.log('Referrer not found:', referrerId);
+          return;
+        }
+
+        // Проверяем, не был ли уже обработан этот реферал
+        const newUserRef = doc(db, 'users', newUserId);
+        const newUserSnap = await getDoc(newUserRef);
+        
+        if (newUserSnap.exists() && newUserSnap.data().referredBy) {
+          console.log('User already has a referrer');
+          return;
+        }
+
+        // Выполняем транзакцию для начисления бонусов
+        await runTransaction(db, async (transaction) => {
+          // Получаем актуальные балансы
+          const referrerFresh = await transaction.get(referrerRef);
+          const newUserFresh = await transaction.get(newUserRef);
+
+          if (!referrerFresh.exists() || !newUserFresh.exists()) {
+            throw new Error('User not found');
           }
 
-          const beforeReferrerBalance = referrerSnap.data().balance || 0;
+          const beforeReferrerBalance = referrerFresh.data().balance || 0;
+          const beforeNewBalance = newUserFresh.data().balance || 0;
 
+          // Начисляем бонус рефереру
           transaction.update(referrerRef, {
             balance: increment(REFERRAL_BONUS),
             'stats.referrals': increment(1),
             'stats.referralEarned': increment(REFERRAL_BONUS)
           });
 
-          // Добавляем запись в историю реферера
+          // Начисляем бонус новому пользователю
+          transaction.update(newUserRef, {
+            balance: increment(REFERRAL_BONUS),
+            referredBy: referrerId
+          });
+
+          // Добавляем запись в историю рефералов реферера
           const referralHistoryRef = doc(collection(db, 'users', referrerId, 'referrals'));
           transaction.set(referralHistoryRef, {
             userId: newUserId,
             bonus: REFERRAL_BONUS,
             ts: serverTimestamp()
-          });
-
-          // Начисляем бонус новому пользователю
-          const newUserRef = doc(db, 'users', newUserId);
-          const newUserSnap = await transaction.get(newUserRef);
-          
-          if (!newUserSnap.exists()) {
-            console.log('New user not found');
-            return;
-          }
-
-          const beforeNewBalance = newUserSnap.data().balance || 0;
-
-          transaction.update(newUserRef, {
-            balance: increment(REFERRAL_BONUS),
-            referredBy: referrerId
           });
 
           // Логируем операции
@@ -1429,7 +1458,7 @@ export default {
 
         console.log(`✅ Referral bonuses ${REFERRAL_BONUS} TON sent to both users`);
         
-        // Показываем уведомление только текущему пользователю
+        // Показываем уведомление текущему пользователю
         if (this.user?.id === newUserId) {
           this.showToast(`🎁 +${REFERRAL_BONUS} TON welcome bonus!`);
         } else if (this.user?.id === referrerId) {
@@ -1453,10 +1482,24 @@ export default {
       const winIdx = this.game.players.findIndex(p => p.userId === winnerData.userId);
       if (winIdx < 0) return;
 
-      const widths = this.game.players.map(p => Math.max(60, Math.min(400, Math.round((p.bet / total) * 400))));
-      const totalTrackWidth = widths.reduce((s, w) => s + w, 0) * TRACK_REPEAT;
-
-      const offsetToWinner = totalTrackWidth / 2 - viewportCenter;
+      const widths = this.game.players.map(p => Math.max(80, Math.min(600, Math.round((p.bet / total) * 600))));
+      
+      // Рассчитываем общую ширину для создания длинной прокрутки
+      const singleTrackWidth = widths.reduce((s, w) => s + w, 0);
+      const totalTrackWidth = singleTrackWidth * TRACK_REPEAT;
+      
+      // Добавляем случайное смещение для более естественной прокрутки
+      const randomOffset = Math.random() * singleTrackWidth;
+      
+      // Цель - остановиться на победителе
+      let offsetToWinner = 0;
+      for (let i = 0; i < winIdx; i++) {
+        offsetToWinner += widths[i];
+      }
+      offsetToWinner += widths[winIdx] / 2;
+      
+      // Создаем эффект длинной прокрутки с остановкой на победителе
+      const targetOffset = -(totalTrackWidth / 2 + offsetToWinner - viewportCenter + randomOffset);
 
       if (this.rouletteBlocks) {
         this.rouletteBlocks.forEach(b => {
@@ -1467,9 +1510,9 @@ export default {
       this.$nextTick(() => {
         const strip = this.$refs?.rouletteStrip;
         if (strip) {
-          strip.style.transition = `transform ${SPIN_DURATION/1000}s cubic-bezier(0.1, 0.7, 0.3, 1)`;
-          strip.style.transform = `translateX(${-offsetToWinner}px)`;
-          this.stripOffset = -offsetToWinner;
+          strip.style.transition = `transform ${SPIN_DURATION/1000}s cubic-bezier(0.1, 0.8, 0.2, 1)`;
+          strip.style.transform = `translateX(${targetOffset}px)`;
+          this.stripOffset = targetOffset;
         }
       });
 
@@ -1520,6 +1563,7 @@ export default {
       ud.emoji = EMOJIS[randInt(EMOJIS.length)];
       this.user = ud;
 
+      // Получаем ID реферера из параметров ссылки
       const referrerId = this.getRefFromStartParam();
       console.log('Login with referrer:', referrerId);
 
@@ -1542,7 +1586,7 @@ export default {
                 referrals: 0,
                 referralEarned: 0
               },
-              referredBy: referrerId,
+              referredBy: referrerId, // Сохраняем ID реферера
               createdAt: serverTimestamp()
             });
             t.set(doc(db, 'config', 'stats'), { 
@@ -1550,7 +1594,9 @@ export default {
             }, { merge: true });
           });
 
-          // Обрабатываем реферала ТОЛЬКО для нового пользователя
+          console.log('New user created with referrer:', referrerId);
+
+          // Если есть реферер, обрабатываем реферальный бонус
           if (referrerId) {
             await this.processReferral(ud.id, referrerId);
           } else {
@@ -1585,6 +1631,8 @@ export default {
 
     listenToUser() {
       if (!this.user) return;
+      
+      if (this._unsubUser) this._unsubUser();
       
       this._unsubUser = onSnapshot(doc(db, 'users', this.user.id), (snap) => {
         if (!snap.exists()) return;
@@ -1659,6 +1707,12 @@ export default {
             this.stopTimer();
             this.clearGameTimer();
             this.game = ng;
+            
+            // Сбрасываем флаг для нового раунда
+            if (ng.winner) {
+              this._prizeAwardedForRound = null;
+            }
+            
             this.$nextTick(() => {
               this.buildRouletteBlocks();
               if (ng.winner) {
@@ -1687,7 +1741,11 @@ export default {
             this.game = ng;
             this.clearRouletteBlocks();
             
-            if (ng.winner && !this.winnerOverlay) {
+            // Проверяем, был ли победитель в предыдущем раунде и не начислен ли еще приз
+            if (ng.winner && !ng.prizeAwarded && this._prizeAwardedForRound !== ng.roundId) {
+              console.log('Winner found, awarding prize:', ng.winner);
+              await this.awardPrizeAfterSpin(ng, ng.winner);
+              this._prizeAwardedForRound = ng.roundId;
               this.showWinnerOverlay(ng.winner);
             }
           }
@@ -1748,6 +1806,7 @@ export default {
           if (gameData.status === 'waiting' && (force || Date.now() >= (gameData.endsAt?.toMillis?.() || 0))) {
             
             if (!gameData.players || gameData.players.length < MIN_PLAYERS) {
+              // Возвращаем ставки
               for (const player of gameData.players || []) {
                 if (player && player.userId && player.bet) {
                   const userRef = doc(db, 'users', player.userId);
@@ -1778,6 +1837,7 @@ export default {
               this.showToast('Not enough players. Bets refunded. New round started.');
               
             } else {
+              // Выбираем победителя
               const winner = weightedRandom(gameData.players);
               if (!winner) return;
               
@@ -1810,8 +1870,15 @@ export default {
     async awardPrizeAfterSpin(gameData, winner) {
       if (!gameData || !winner) return;
       
+      // Проверяем, не был ли уже начислен приз для этого раунда
       if (gameData.prizeAwarded) {
         console.log('Prize already awarded for this round, skipping');
+        return;
+      }
+      
+      // Проверяем по внутреннему флагу
+      if (this._prizeAwardedForRound === gameData.roundId) {
+        console.log('Prize already awarded internally for this round, skipping');
         return;
       }
       
@@ -1901,9 +1968,11 @@ export default {
 
         console.log(`✅ Prize awarded: ${winner.prize} TON to ${winner.userId}`);
         
+        // Обновляем локальное состояние
         if (this.game) {
           this.game.prizeAwarded = true;
         }
+        this._prizeAwardedForRound = gameData.roundId;
         
       } catch (e) {
         console.error('Error awarding prize:', e);
@@ -1916,11 +1985,6 @@ export default {
       const myBet = this.game?.players?.find(p => p.userId === this.user?.id);
       
       console.log('Showing winner overlay:', w);
-      
-      // Начисляем выигрыш ТОЛЬКО когда показываем оверлей
-      if (this.game?.winner && !this.game.prizeAwarded) {
-        this.awardPrizeAfterSpin(this.game, this.game.winner);
-      }
       
       this.winnerOverlay = { 
         name: w.name, 
@@ -1935,7 +1999,7 @@ export default {
         if (this.winnerOverlay) {
           this.dismissWinner();
         }
-      }, 6000);
+      }, 8000);
     },
 
     dismissWinner() { 
